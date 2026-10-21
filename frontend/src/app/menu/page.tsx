@@ -5,6 +5,10 @@ import Link from "next/link";
 import Image from "next/image";
 import BrewLiteLogo from "../components/BrewLiteLogo";
 import Footer from "../components/Footer";
+import Header from "../components/Header";
+import ProductDetailModal, {
+  CustomizationDetails,
+} from "../components/ProductDetailModal";
 
 export interface Product {
   id: number;
@@ -21,12 +25,15 @@ export interface Product {
   };
 }
 
-interface CartItem {
+export interface CartItem {
   id: number;
   name: string;
   price: number;
   temp: string;
   quantity: number;
+  size?: string;
+  toppings?: string[];
+  notes?: string;
 }
 
 /**
@@ -279,6 +286,60 @@ export default function MenuPage() {
     [cart]
   );
 
+  // Product Detail Modal state (Task 4)
+  const [selectedProductForDetail, setSelectedProductForDetail] = useState<Product | null>(null);
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+
+  const handleOpenDetail = (product: Product) => {
+    setSelectedProductForDetail(product);
+    setIsDetailModalOpen(true);
+  };
+
+  const handleCustomizedAddToCart = (
+    product: Product,
+    customization: CustomizationDetails
+  ) => {
+    setCart((prev) => {
+      const toppingsKey = (customization.toppings || [])
+        .map((t) => t.id)
+        .sort()
+        .join(",");
+      const existingIndex = prev.findIndex(
+        (item) =>
+          item.id === product.id &&
+          item.size === customization.size &&
+          item.temp === customization.temp &&
+          (item.toppings || []).sort().join(",") === toppingsKey
+      );
+
+      if (existingIndex > -1) {
+        const updated = [...prev];
+        updated[existingIndex] = {
+          ...updated[existingIndex],
+          quantity: updated[existingIndex].quantity + customization.quantity,
+        };
+        return updated;
+      }
+
+      return [
+        ...prev,
+        {
+          id: product.id,
+          name: product.name,
+          price: customization.unitPrice,
+          temp: customization.temp,
+          quantity: customization.quantity,
+          size: customization.size,
+          toppings: customization.toppings.map((t) => t.name),
+          notes: customization.notes,
+        },
+      ];
+    });
+
+    setBadgeAnimated(true);
+    setTimeout(() => setBadgeAnimated(false), 300);
+  };
+
   const handleAddToCart = (product: Product) => {
     const defaultTemp = product.chips?.temps ? product.chips.temps[0] : "Iced";
     const temp = productTemps[product.id] || defaultTemp;
@@ -334,105 +395,14 @@ export default function MenuPage() {
 
   return (
     <div className="min-h-screen bg-[#fef8f4] text-[#1d1b19] flex flex-col font-body selection:bg-[#fedcc2] selection:text-[#2c1810]">
-      {/* ── HEADER ── */}
-      <header className="sticky top-0 z-50 bg-[#FEF8F4]/90 backdrop-blur-md border-b border-[#2C1810]/10 px-4 py-3">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 w-full flex items-center justify-between gap-6">
-          <div className="flex items-center">
-            <Link className="flex items-center" href="/menu">
-              <BrewLiteLogo className="h-9 md:h-10 w-auto" />
-            </Link>
-            <nav className="hidden sm:flex items-center gap-1.5 ml-4">
-              <Link
-                href="/menu"
-                className="px-3.5 py-1.5 rounded-full text-xs font-semibold bg-[#2C1810] text-[#FEF8F4] font-body"
-              >
-                {"Thực đơn".normalize("NFC")}
-              </Link>
-              <Link
-                href="#"
-                className="px-3.5 py-1.5 rounded-full text-xs font-medium text-[#2C1810]/70 hover:text-[#2C1810] hover:bg-[#2C1810]/5 transition-colors font-body"
-              >
-                {"Đơn hàng".normalize("NFC")}
-              </Link>
-            </nav>
-          </div>
-
-          <div className="hidden md:flex items-center gap-3 flex-1 justify-center max-w-xl">
-            <div className="w-full max-w-md hidden md:flex items-center justify-between px-4 py-2 bg-[#2C1810]/5 hover:bg-[#2C1810]/10 border border-[#2C1810]/10 rounded-full text-xs text-[#2C1810]/70 transition-all cursor-pointer">
-              <div className="flex items-center gap-2 flex-1">
-                <span className="material-symbols-outlined text-base">
-                  search
-                </span>
-                <input
-                  type="text"
-                  placeholder={"Tìm đồ uống, cà phê, hạt rang...".normalize("NFC")}
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="bg-transparent text-xs text-[#1d1b19] placeholder:text-[#827470] focus:outline-none w-full font-body"
-                />
-              </div>
-              <span className="bg-[#e7e1dd] px-1.5 py-0.5 rounded text-[11px] font-bold text-[#504440] font-mono">
-                ⌘K
-              </span>
-            </div>
-
-            <button
-              type="button"
-              className="flex items-center gap-1 bg-[#f8f2ee] hover:bg-[#f3ede9] px-4 py-1.5 rounded-full text-[#1d1b19] transition-all whitespace-nowrap shrink-0 border border-[#d3c3be]/40 font-body"
-            >
-              <span className="w-2 h-2 rounded-full bg-[#febc85] animate-pulse" />
-              <span className="text-[11px] font-bold truncate max-w-[140px]">
-                Downtown Roastery
-              </span>
-              <span className="material-symbols-outlined text-sm text-[#504440]">
-                expand_more
-              </span>
-            </button>
-          </div>
-
-          <div className="flex items-center gap-2 sm:gap-3">
-            <button
-              type="button"
-              className="relative w-10 h-10 rounded-full flex items-center justify-center bg-[#f8f2ee] hover:bg-[#f3ede9] text-[#1d1b19] transition-all"
-            >
-              <span className="material-symbols-outlined text-xl">
-                notifications
-              </span>
-              <span className="absolute top-2 right-2 w-2 h-2 rounded-full bg-[#845326]" />
-            </button>
-
-            <button
-              type="button"
-              className={`flex items-center gap-1.5 bg-[#2c1810] hover:bg-[#351300] text-[#9e7e73] px-4 py-1.5 rounded-full transition-all active:scale-95 font-body ${
-                badgeAnimated ? "scale-105" : ""
-              }`}
-            >
-              <span className="material-symbols-outlined text-xl text-white">
-                shopping_bag
-              </span>
-              <span className="text-[13px] font-bold text-white font-body">
-                {cartCount}
-              </span>
-            </button>
-
-            <div className="hidden sm:flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#D97736]/10 text-[#D97736] border border-[#D97736]/20 text-xs font-semibold whitespace-nowrap font-body">
-              <span>{"⭐ 120 điểm".normalize("NFC")}</span>
-            </div>
-
-            {/* Original Google Stitch Avatar Asset */}
-            <div className="relative w-8 h-8 rounded-full overflow-hidden ring-2 ring-[#ede7e3]">
-              <Image
-                alt="Profile"
-                src="https://lh3.googleusercontent.com/aida/AEtjO1VeNmJ7fNrlOsKRDCp-paWPp28u_ONFRs411sz930XjQrQBNjra7iOYMYqp9QNdUOzQEI29k_s1q2kKn_wZ0WgjjAyP4mxkpxkgDI5Py7jJZYmWHYYkRUyS_U9hoFMK3NpNPt7glbxb2KUa8t-9ECy8_ehEASrNhWWvgJMfTkViWYPA0IwF99vCWCiYJsDIsKPn-wP75woSuq6WiWKsGVB6WNaH7pK7uZvVAq7NzE9VU3TpdCipzqc2kk9t"
-                fill
-                sizes="32px"
-                className="object-cover"
-                unoptimized
-              />
-            </div>
-          </div>
-        </div>
-      </header>
+      {/* ── HEADER (STANDARDIZED COMPONENT) ── */}
+      <Header
+        cartCount={cartCount}
+        searchQuery={searchQuery}
+        onSearchChange={setSearchQuery}
+        activeTab="menu"
+        badgeAnimated={badgeAnimated}
+      />
 
       {/* ── TOP WELCOME & LOCATION SCRIM BANNER ── */}
       <section className="relative w-full overflow-hidden bg-[#f8f2ee] px-4 md:px-8 lg:px-12 py-6 lg:py-10">
@@ -575,7 +545,15 @@ export default function MenuPage() {
 
             {/* Asymmetrical Feature Hero Vignette (Barista Spotlight - Original Stitch URL) */}
             <div className="lg:col-span-5 relative">
-              <div className="relative rounded-3xl overflow-hidden shadow-xl bg-[#ede7e3] aspect-4/3 group">
+              <div
+                className="relative rounded-3xl overflow-hidden shadow-xl bg-[#ede7e3] aspect-4/3 group cursor-pointer"
+                onClick={() =>
+                  handleOpenDetail(
+                    products.find((p) => p.id === 2) || DEFAULT_PRODUCTS[1]
+                  )
+                }
+                title={"Xem chi tiết & Tùy chọn Cà Phê Muối".normalize("NFC")}
+              >
                 <Image
                   src={normalizeStitchImageUrl(
                     "https://lh3.googleusercontent.com/aida-public/AB6AXuAYAWNv7xan_IBhkVnDwTw9ytyeJzEWqGL2xrdQkStMsLr84eJr6AYLJMbTWrqZyFYH3bSYACwcwaM5V8yPF-X64NNkPJWgjZn7qd4UvLYlxz6EmM78WzjqR6R4a-hUXrw-n6SmQ68flgxEqJ3IEME8TTurzNVLddbbUtLO3uTbX859LBRKKkH3y6b3BtoIBFyGKkaxsEGKtncc48Ap-tUAoQnzI4gJzJnuB-KDy0q_9uIEIHQyxT5XQw",
@@ -762,7 +740,8 @@ export default function MenuPage() {
               return (
                 <article
                   key={product.id}
-                  className="product-card flex flex-col justify-between bg-[#f8f2ee] rounded-2xl overflow-hidden shadow-sm hover:shadow-md transition-all duration-300 p-3.5 group border border-[#2c1810]/5"
+                  className="product-card flex flex-col justify-between bg-[#f8f2ee] rounded-2xl overflow-hidden shadow-sm hover:shadow-md transition-all duration-300 p-3.5 group border border-[#2c1810]/5 cursor-pointer"
+                  onClick={() => handleOpenDetail(product)}
                 >
                   <div className="relative w-full aspect-square rounded-xl overflow-hidden bg-[#ede7e3]">
                     <Image
@@ -847,13 +826,17 @@ export default function MenuPage() {
 
                     <button
                       type="button"
-                      className="h-10 px-4 rounded-xl bg-[#2c1810] hover:bg-[#845326] text-white flex items-center gap-1 transition-all active:scale-95 shadow-sm text-[13px] font-semibold font-body"
-                      onClick={() => handleAddToCart(product)}
+                      className="h-10 px-4 rounded-xl bg-[#2c1810] hover:bg-[#845326] text-white flex items-center gap-1.5 transition-all active:scale-95 shadow-sm text-[13px] font-semibold font-body cursor-pointer"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleOpenDetail(product);
+                      }}
+                      title={"Tùy chọn món & Thêm vào giỏ".normalize("NFC")}
                     >
                       <span className="material-symbols-outlined text-lg">
-                        add
+                        tune
                       </span>
-                      <span>Add</span>
+                      <span>{"Tùy chọn".normalize("NFC")}</span>
                     </button>
                   </div>
                 </article>
@@ -967,6 +950,15 @@ export default function MenuPage() {
           </div>
         </div>
       </aside>
+
+      {/* ── PRODUCT DETAIL CUSTOMIZATION MODAL (TASK 4) ── */}
+      <ProductDetailModal
+        product={selectedProductForDetail}
+        isOpen={isDetailModalOpen}
+        onClose={() => setIsDetailModalOpen(false)}
+        onAddToCart={handleCustomizedAddToCart}
+        isModal={true}
+      />
 
       {/* ── FOOTER ── */}
       <Footer />
