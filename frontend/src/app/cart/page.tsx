@@ -22,17 +22,29 @@ import {
   Sparkles,
   Coffee,
   X,
+  Ticket,
+  AlertCircle,
 } from "lucide-react";
 import Header from "../components/Header";
 import Footer from "../components/Footer";
 import ProductDetailModal, { CustomizationDetails } from "../components/ProductDetailModal";
-import { DEFAULT_PRODUCTS, Product } from "../menu/page";
-import { useCartStore, CartItem } from "../store/cartStore";
+import VoucherModal from "../components/VoucherModal";
+import type { Product } from "../menu/page";
+import { DEFAULT_PRODUCTS } from "../utils/productUtils";
+import { useCartStore, CartItem, isBakeryProduct } from "../store/cartStore";
 import { useAuthStore, apiFetch } from "../store/authStore";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function vnd(n: number) {
   return n.toLocaleString("vi-VN") + "đ";
+}
+
+function chunkArray<T>(arr: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) {
+    chunks.push(arr.slice(i, i + size));
+  }
+  return chunks;
 }
 
 const FALLBACK_IMG = "/images/products/ca-phe-sua.png";
@@ -123,6 +135,56 @@ function Stepper({
   );
 }
 
+/** Format ice level display according to rules:
+ * - 100% -> "100% đá"
+ * - 70% / Ít đá -> "70% đá"
+ * - 50% -> "50% đá"
+ * - 0% / Không đá -> "Không đá"
+ */
+function formatIceLevel(ice?: string): string {
+  if (!ice) return "100% đá";
+  const val = ice.trim();
+  if (val.includes("100%")) return "100% đá";
+  if (val.includes("70%")) return "70% đá";
+  if (val.includes("50%")) return "50% đá";
+  if (
+    val.includes("0%") ||
+    val.toLowerCase().includes("không") ||
+    val.toLowerCase().includes("khong")
+  ) {
+    return "Không đá";
+  }
+  return val;
+}
+
+/** Format sugar level display according to rules:
+ * - 100% -> "100% đường"
+ * - 70% -> "70% đường"
+ * - 50% -> "50% đường"
+ * - 0% / Không đường -> "Không đường"
+ */
+function formatSugarLevel(sugar?: string): string {
+  if (!sugar) return "100% đường";
+  const val = sugar.trim();
+  if (
+    val === "0%" ||
+    val.toLowerCase().includes("không") ||
+    val.toLowerCase().includes("khong")
+  ) {
+    return "Không đường";
+  }
+  if (val.endsWith("%")) {
+    return `${val} đường`;
+  }
+  if (
+    !val.toLowerCase().includes("đường") &&
+    !val.toLowerCase().includes("duong")
+  ) {
+    return `${val} đường`;
+  }
+  return val;
+}
+
 /** Single cart item card */
 function CartItemCard({
   item,
@@ -135,25 +197,15 @@ function CartItemCard({
   onRequestDelete: (item: CartItem) => void;
   onEdit: (item: CartItem) => void;
 }) {
-  const isIced = item.temp === "iced" || item.temp?.toLowerCase() === "iced";
+  const isBakery = item.isBakery || isBakeryProduct(item);
+  const isWarm =
+    item.servingStyle === "Hâm nóng" ||
+    item.servingStyle === "Hâm nóng giòn" ||
+    (!item.servingStyle && (item.temperature === "HOT" || item.temp?.toLowerCase() === "hot"));
+  const isHot =
+    item.temperature === "HOT" ||
+    item.temp?.toLowerCase() === "hot";
   const totalLinePrice = item.price * item.quantity;
-
-  const subtitle =
-    item.name.toLowerCase().includes("muối")
-      ? "Phin nhôm truyền thống pha chậm × Sữa đặc nguyên kem".normalize("NFC")
-      : item.name.toLowerCase().includes("sữa đá") || item.name.toLowerCase().includes("sua da")
-        ? "Robusta Đắk Lắk đậm đặc × Sữa đặc kem béo".normalize("NFC")
-        : item.name.toLowerCase().includes("matcha")
-          ? "Matcha Uji đánh bọt × Sữa yến mạch Minor Figures".normalize("NFC")
-          : item.name.toLowerCase().includes("macchiato")
-            ? "Double espresso × Sữa nguyên kem × Caramel nghệ nhân".normalize("NFC")
-            : item.name.toLowerCase().includes("flat white")
-              ? "Double ristretto × Yến mạch Minor Figures × Vanilla Madagascar".normalize("NFC")
-              : item.name.toLowerCase().includes("cold brew")
-                ? "Ngâm lạnh 20 giờ × Nước tonic citrus × Hương hoa thảo mộc".normalize("NFC")
-                : item.name.toLowerCase().includes("chocolat") || item.name.toLowerCase().includes("cruffin")
-                  ? "Bơ Châu Âu xốp tầng tầng × Nướng mới mỗi giờ".normalize("NFC")
-                  : null;
 
   return (
     <article className="bg-white rounded-2xl shadow-xs border border-stone-100 p-4 flex gap-4 transition-all duration-300 hover:shadow-sm">
@@ -178,11 +230,6 @@ function CartItemCard({
             <h3 className="font-headline text-[15px] font-bold text-[#1d1b19] leading-snug truncate">
               {item.name}
             </h3>
-            {subtitle && (
-              <p className="text-[11px] text-stone-400 mt-0.5 line-clamp-1 font-body italic">
-                {subtitle}
-              </p>
-            )}
           </div>
 
           {/* Action buttons: Edit & Trash */}
@@ -208,36 +255,73 @@ function CartItemCard({
           </div>
         </div>
 
-        {/* Row 2: Attribute & topping badges */}
+        {/* Dòng 1: Tùy chọn cơ bản */}
         <div className="flex flex-wrap items-center gap-1.5">
-          {/* Size */}
-          {item.size && (
-            <AttributeBadge>Size {item.size}</AttributeBadge>
-          )}
-
-          {/* Ice / Hot (Icons are synchronized text-stone-900, not blue or red) */}
-          {isIced ? (
-            <AttributeBadge>
-              <Snowflake size={12} className="text-stone-900" strokeWidth={2.2} />
-              <span>{item.temp === "iced" ? "Đá thường" : item.temp}</span>
-            </AttributeBadge>
+          {isBakery ? (
+            <>
+              {/* Cách phục vụ */}
+              {isWarm ? (
+                <AttributeBadge>
+                  <Flame size={12} className="text-stone-900" strokeWidth={2.2} />
+                  <span>{"Hâm nóng".normalize("NFC")}</span>
+                </AttributeBadge>
+              ) : (
+                <AttributeBadge>
+                  <Snowflake size={12} className="text-stone-900" strokeWidth={2.2} />
+                  <span>{"Dùng ngay".normalize("NFC")}</span>
+                </AttributeBadge>
+              )}
+            </>
           ) : (
-            <AttributeBadge>
-              <Flame size={12} className="text-stone-900" strokeWidth={2.2} />
-              <span>{"Uống Nóng".normalize("NFC")}</span>
-            </AttributeBadge>
-          )}
+            <>
+              {/* 1. Kích thước (Size S/M/L) */}
+              {item.size && (
+                <AttributeBadge>Size {item.size}</AttributeBadge>
+              )}
 
-          {/* Paid toppings: Warm honey/caramel highlighted badge */}
-          {item.toppings &&
-            item.toppings.length > 0 &&
-            item.toppings.map((t) => (
-              <ToppingBadge key={t}>
-                <span className="text-[11px] font-bold">+</span>
-                <span>{t}</span>
-              </ToppingBadge>
-            ))}
+              {/* 2. Nhiệt độ (Uống Nóng / Uống Lạnh) */}
+              {isHot ? (
+                <AttributeBadge>
+                  <Flame size={12} className="text-stone-900" strokeWidth={2.2} />
+                  <span>{"Uống Nóng".normalize("NFC")}</span>
+                </AttributeBadge>
+              ) : (
+                <AttributeBadge>
+                  <Snowflake size={12} className="text-stone-900" strokeWidth={2.2} />
+                  <span>{"Uống Lạnh".normalize("NFC")}</span>
+                </AttributeBadge>
+              )}
+
+              {/* 3. Lượng đá: Uống Nóng ẩn hoàn toàn; Uống Lạnh hiển thị tag tương ứng */}
+              {!isHot && (
+                <AttributeBadge>
+                  <span>{formatIceLevel(item.iceLevel)}</span>
+                </AttributeBadge>
+              )}
+
+              {/* 4. Mức đường: Luôn hiển thị */}
+              <AttributeBadge>
+                <span>{formatSugarLevel(item.sugarLevel)}</span>
+              </AttributeBadge>
+            </>
+          )}
         </div>
+
+        {/* Dòng 2: Topping đi kèm (Cứ 2 topping xuống 1 dòng) */}
+        {item.toppings && item.toppings.length > 0 && (
+          <div className="flex flex-col gap-1.5">
+            {chunkArray(item.toppings, 2).map((pair, pIdx) => (
+              <div key={pIdx} className="flex flex-wrap items-center gap-1.5">
+                {pair.map((t) => (
+                  <ToppingBadge key={t}>
+                    <span className="text-[11px] font-bold">+</span>
+                    <span>{t}</span>
+                  </ToppingBadge>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* Row 3: Price + Stepper */}
         <div className="flex items-end justify-between gap-2 mt-1">
@@ -273,6 +357,8 @@ function CartItemCard({
     </article>
   );
 }
+
+const CartItemRow = CartItemCard;
 
 // ─── Sidebar Cards ───────────────────────────────────────────────────────────
 
@@ -320,88 +406,208 @@ function LocationCard() {
 }
 
 /** Card 2: Promo code */
+export interface VoucherItem {
+  code: string;
+  description: string;
+  discountPercent: number;
+  minOrderAmount: number;
+  maxDiscountAmount?: number;
+  quantity?: number;
+}
+
 function PromoCard({
   appliedCode,
+  appliedPercent,
+  vouchers,
+  matchedVoucher,
   onApply,
   onRemove,
+  onOpenModal,
+  subtotal,
+  discountAmount,
 }: {
   appliedCode: string | null;
+  appliedPercent?: number;
+  discountAmount?: number;
+  vouchers?: VoucherItem[];
+  matchedVoucher?: VoucherItem | null;
+  subtotal: number;
   onApply: (code: string) => void;
   onRemove: () => void;
+  onOpenModal: () => void;
 }) {
   const [inputCode, setInputCode] = useState("");
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const isUnderMin = Boolean(
+    matchedVoucher?.minOrderAmount && subtotal < matchedVoucher.minOrderAmount
+  );
+  const missingAmount = isUnderMin
+    ? (matchedVoucher?.minOrderAmount || 0) - subtotal
+    : 0;
 
   const handleSubmit = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!inputCode.trim()) return;
-    onApply(inputCode.trim().toUpperCase());
+    const clean = inputCode.trim().toUpperCase();
+
+    // Validate code
+    const found = vouchers?.find((v) => v.code === clean);
+    if (
+      !found &&
+      clean !== "BREWCOZY" &&
+      clean !== "BREW10" &&
+      clean !== "BREW20" &&
+      clean !== "BREW50" &&
+      clean !== "BREWLITE10"
+    ) {
+      setErrorMessage(`Mã giảm giá "${clean}" không tồn tại hoặc đã hết hạn.`);
+      return;
+    }
+
+    if (found && found.minOrderAmount && subtotal < found.minOrderAmount) {
+      const missing = found.minOrderAmount - subtotal;
+      setErrorMessage(
+        `Mã "${clean}" yêu cầu đơn tối thiểu ${found.minOrderAmount.toLocaleString(
+          "vi-VN"
+        )}đ (còn thiếu ${missing.toLocaleString("vi-VN")}đ).`
+      );
+      return;
+    }
+
+    setErrorMessage(null);
+    onApply(clean);
     setInputCode("");
   };
 
   return (
     <div className="bg-white rounded-2xl border border-stone-100 shadow-xs p-5 flex flex-col gap-3">
-      <div className="flex items-center gap-2">
-        <div className="w-8 h-8 rounded-lg bg-[#f4efe6] flex items-center justify-center">
-          <Tag size={15} className="text-[#845326]" strokeWidth={1.75} />
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <div className="w-8 h-8 rounded-lg bg-[#f4efe6] flex items-center justify-center">
+            <Tag size={15} className="text-[#845326]" strokeWidth={1.75} />
+          </div>
+          <span className="font-headline text-[14px] font-bold text-[#1d1b19]">
+            {"Mã giảm giá ưu đãi".normalize("NFC")}
+          </span>
         </div>
-        <span className="font-headline text-[14px] font-bold text-[#1d1b19]">
-          {"Mã giảm giá ưu đãi".normalize("NFC")}
-        </span>
+
+        {/* Voucher count pill */}
+        <button
+          type="button"
+          onClick={onOpenModal}
+          className="inline-flex items-center gap-1 text-[11px] font-bold text-[#845326] hover:text-[#5a3414] transition-colors cursor-pointer"
+        >
+          <span>{vouchers?.reduce((s, x) => s + (x.quantity || 1), 0) || 0} mã khả dụng</span>
+          <ChevronRight size={13} />
+        </button>
       </div>
 
       {!appliedCode ? (
-        <form onSubmit={handleSubmit} className="flex gap-2">
-          <input
-            type="text"
-            value={inputCode}
-            onChange={(e) => setInputCode(e.target.value.toUpperCase())}
-            placeholder={"VD: BREWCOZY".normalize("NFC")}
-            id="promoCodeInput"
-            className="flex-1 px-3.5 py-2.5 text-[13px] bg-[#f8f2ee] border border-stone-200 rounded-xl focus:outline-hidden focus:border-[#845326] focus:bg-white text-[#1d1b19] placeholder:text-stone-400 font-body transition-colors uppercase"
-          />
-          <button
-            type="submit"
-            className="px-4 py-2.5 bg-[#221811] hover:bg-[#2c1810] text-white text-[13px] font-bold rounded-xl transition-colors font-body whitespace-nowrap active:scale-95"
-          >
-            {"Áp dụng".normalize("NFC")}
-          </button>
-        </form>
-      ) : (
-        <div className="flex items-center justify-between gap-2 bg-[#fff7ed] border border-[#fed7aa] rounded-xl px-3.5 py-2.5">
-          <div className="flex items-center gap-2 min-w-0">
-            <CheckCircle2 size={16} className="text-emerald-600 shrink-0" strokeWidth={2} />
-            <div className="min-w-0">
-              <p className="text-[13px] font-bold text-[#2c1810] font-body">
-                {`Mã ${appliedCode} (-15% Giờ vàng)`}
-              </p>
-              <p className="text-[11px] text-stone-500 font-body">
-                {"Đã áp dụng giảm 15% vào đơn hàng".normalize("NFC")}
-              </p>
-            </div>
-          </div>
+        <div className="flex flex-col gap-2.5">
+          <form onSubmit={handleSubmit} className="flex gap-2">
+            <input
+              type="text"
+              value={inputCode}
+              onChange={(e) => {
+                setInputCode(e.target.value.toUpperCase());
+                if (errorMessage) setErrorMessage(null);
+              }}
+              placeholder={"Nhập mã ưu đãi (VD: BREW10)".normalize("NFC")}
+              id="promoCodeInput"
+              className="flex-1 px-3.5 py-2.5 text-[13px] bg-[#f8f2ee] border border-stone-200 rounded-xl focus:outline-hidden focus:border-[#845326] focus:bg-white text-[#1d1b19] placeholder:text-stone-400 font-body transition-colors uppercase font-mono"
+            />
+            <button
+              type="submit"
+              className="px-4 py-2.5 bg-[#221811] hover:bg-[#2c1810] text-white text-[13px] font-bold rounded-xl transition-colors font-body whitespace-nowrap active:scale-95 cursor-pointer"
+            >
+              {"Áp dụng".normalize("NFC")}
+            </button>
+          </form>
+
+          {errorMessage && (
+            <p className="text-[11px] text-red-600 font-medium flex items-center gap-1.5 animate-fadeIn">
+              <AlertCircle size={13} className="shrink-0 text-red-500" />
+              <span>{errorMessage}</span>
+            </p>
+          )}
+
+          {/* Clean Voucher Modal Trigger Button */}
           <button
             type="button"
-            onClick={onRemove}
-            aria-label={"Gỡ mã".normalize("NFC")}
-            className="shrink-0 p-1 rounded-full hover:bg-[#fed7aa] text-stone-500 hover:text-[#b45309] transition-colors"
+            onClick={onOpenModal}
+            className="w-full flex items-center justify-between p-3 rounded-xl bg-[#FAF0E6]/70 hover:bg-[#FAF0E6] border border-[#845326]/20 text-left transition-all cursor-pointer group"
           >
-            <X size={15} strokeWidth={2.2} />
+            <div className="flex items-center gap-2.5 text-[#845326]">
+              <Ticket size={16} />
+              <div className="flex flex-col">
+                <span className="text-xs font-bold font-body leading-tight">
+                  {"Chọn hoặc đổi mã giảm giá".normalize("NFC")}
+                </span>
+                <span className="text-[10px] text-stone-500 font-body">
+                  {"Dùng Hạt Vàng hoặc áp dụng mã sẵn có".normalize("NFC")}
+                </span>
+              </div>
+            </div>
+            <div className="flex items-center gap-1 text-[11px] font-bold text-[#845326]">
+              <span>{"Chọn mã".normalize("NFC")}</span>
+              <ChevronRight
+                size={14}
+                className="group-hover:translate-x-0.5 transition-transform"
+              />
+            </div>
           </button>
         </div>
-      )}
+      ) : (
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center justify-between gap-2 bg-[#fffaf5] border border-[#f3d5ba] rounded-2xl p-3.5 shadow-2xs">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="w-8 h-8 rounded-xl bg-[#845326] text-white flex items-center justify-center shrink-0 shadow-2xs">
+                <Tag size={15} />
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="font-mono font-bold text-xs bg-[#2c1810] text-white px-2 py-0.5 rounded-md">
+                    {appliedCode}
+                  </span>
+                  <span className="text-xs font-bold text-[#845326]">
+                    -{appliedPercent ?? 15}%
+                  </span>
+                </div>
+                {isUnderMin ? (
+                  <p className="text-[11px] text-amber-700 font-medium font-body mt-0.5 flex items-center gap-1">
+                    <AlertCircle size={12} className="shrink-0 text-amber-600" />
+                    <span>Thiếu {vnd(missingAmount)} để được giảm</span>
+                  </p>
+                ) : (
+                  <p className="text-[11px] text-stone-500 font-body mt-0.5 truncate">
+                    {discountAmount && discountAmount > 0
+                      ? `Đã giảm -${vnd(discountAmount)} vào đơn hàng`
+                      : "Đã kích hoạt ưu đãi vào đơn"}
+                  </p>
+                )}
+              </div>
+            </div>
 
-      {!appliedCode && (
-        <p className="text-[11px] text-stone-400 font-body">
-          {"Thử mã ".normalize("NFC")}
-          <button
-            type="button"
-            onClick={() => onApply("BREWCOZY")}
-            className="font-mono font-bold text-[#845326] bg-[#fff2e5] hover:bg-[#fde7d4] px-1.5 py-0.5 rounded transition"
-          >
-            BREWCOZY
-          </button>
-          {" để nhận ưu đãi -15% giờ vàng hôm nay!".normalize("NFC")}
-        </p>
+            <div className="flex items-center gap-1 shrink-0">
+              <button
+                type="button"
+                onClick={onOpenModal}
+                className="px-2.5 py-1 text-[11px] font-bold text-[#845326] hover:bg-[#FAF0E6] rounded-lg transition-colors cursor-pointer"
+              >
+                {"Đổi mã".normalize("NFC")}
+              </button>
+              <button
+                type="button"
+                onClick={onRemove}
+                aria-label={"Gỡ mã".normalize("NFC")}
+                className="p-1.5 rounded-lg hover:bg-stone-200 text-stone-400 hover:text-stone-700 transition-colors cursor-pointer"
+              >
+                <X size={15} strokeWidth={2.2} />
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -417,6 +623,7 @@ function SummaryCard({
   itemCount,
   discount,
   promoCode,
+  matchedVoucher,
   onCheckout,
   isLoading,
   error,
@@ -425,21 +632,48 @@ function SummaryCard({
   itemCount: number;
   discount: number;
   promoCode: string | null;
+  matchedVoucher?: VoucherItem | null;
   onCheckout: () => void;
   isLoading?: boolean;
   error?: string | null;
 }) {
   const ECO_FEE = 0;
   const afterDiscount = Math.max(0, subtotal - discount);
-  const vat = Math.round(afterDiscount * 0.08);
-  const total = afterDiscount + vat + ECO_FEE;
+  // Thuế VAT 8% áp dụng vào giá tạm tính
+  const vat = Math.floor(afterDiscount * 0.08);
+  // Làm tròn xuống hàng nghìn VNĐ (ví dụ 144.720đ -> 144.000đ)
+  const total = Math.floor((afterDiscount + vat + ECO_FEE) / 1000) * 1000;
   const loyaltyPoints = Math.floor(total / 1000);
+
+  const isUnderMin = Boolean(
+    promoCode &&
+      matchedVoucher?.minOrderAmount &&
+      subtotal < matchedVoucher.minOrderAmount
+  );
+  const missingAmount = isUnderMin
+    ? (matchedVoucher?.minOrderAmount || 0) - subtotal
+    : 0;
 
   return (
     <div className="bg-white rounded-2xl border border-stone-100 shadow-xs p-5 flex flex-col gap-4">
       <span className="font-headline text-[14px] font-bold text-[#1d1b19]">
         {"Tóm tắt thanh toán".normalize("NFC")}
       </span>
+
+      {/* Warning if promo code is active but min order not reached */}
+      {isUnderMin && matchedVoucher && (
+        <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 text-xs flex items-start gap-2.5">
+          <AlertCircle size={15} className="shrink-0 text-amber-600 mt-0.5" />
+          <div className="flex-1">
+            <p className="font-bold leading-tight">
+              Mã <span className="font-mono">{promoCode}</span> chưa đủ điều kiện
+            </p>
+            <p className="text-[11px] text-amber-800 mt-0.5">
+              Yêu cầu đơn tối thiểu {vnd(matchedVoucher.minOrderAmount || 0)}. Mua thêm <strong>{vnd(missingAmount)}</strong> để được giảm {matchedVoucher.discountPercent}%!
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Line items */}
       <div className="flex flex-col gap-2.5 text-[13px] font-body">
@@ -451,13 +685,13 @@ function SummaryCard({
           <span className="font-medium text-stone-900">{vnd(subtotal)}</span>
         </div>
 
-        {/* Ưu đãi Giờ vàng / Khuyến mại (Hiển thị số âm nổi bật màu cam đất/đỏ) */}
+        {/* Khuyến mãi */}
         {discount > 0 && (
           <div className="flex justify-between text-[#b45309] font-semibold">
-            <span className="flex items-center gap-1">
-              {"Ưu đãi Giờ vàng / Khuyến mại".normalize("NFC")}
+            <span className="flex items-center gap-1.5 leading-none">
+              <span className="leading-none">{"Khuyến mãi".normalize("NFC")}</span>
               {promoCode && (
-                <span className="text-[10px] bg-[#fef3c7] text-[#92400e] px-1.5 py-0.2 rounded font-mono">
+                <span className="inline-flex items-center justify-center text-[10px] bg-[#fef3c7] text-[#92400e] px-1.5 py-0.5 rounded font-mono font-bold leading-none border border-[#fde68a]">
                   {promoCode}
                 </span>
               )}
@@ -477,7 +711,7 @@ function SummaryCard({
         {/* VAT */}
         <div className="flex justify-between text-stone-600">
           <span>{"Thuế VAT (8%)".normalize("NFC")}</span>
-          <span className="text-stone-800">{vnd(vat)}</span>
+          <span className="text-stone-800 font-medium">{vnd(vat)}</span>
         </div>
 
         {/* Tích luỹ hạt thưởng */}
@@ -496,12 +730,14 @@ function SummaryCard({
       {/* Tổng cộng */}
       <div className="flex items-end justify-between gap-2">
         <div>
-          <p className="text-[11px] text-stone-400 font-body uppercase tracking-wider font-bold">
-            {"Tổng cộng".normalize("NFC")}
-          </p>
-          <p className="text-[11px] text-stone-400 font-body">
-            {"Đã bao gồm VAT".normalize("NFC")}
-          </p>
+          <div className="flex items-center gap-1.5">
+            <p className="text-[11px] text-stone-400 font-body uppercase tracking-wider font-bold">
+              {"Tổng cộng".normalize("NFC")}
+            </p>
+            <span className="text-[11px] text-stone-400 font-body font-medium">
+              {"(đã làm tròn)".normalize("NFC")}
+            </span>
+          </div>
         </div>
         <span className="text-2xl font-bold text-stone-900 leading-tight">
           {vnd(total)}
@@ -642,6 +878,15 @@ function EmptyCart() {
 }
 
 // ─── Main Cart Page ──────────────────────────────────────────────────────────
+const VOUCHER_METADATA: Record<string, { title: string; minOrder: number; maxDiscount: number }> = {
+  BREW10: { title: "Voucher Giảm 10% Toàn Đơn", minOrder: 0, maxDiscount: 15000 },
+  BREW20: { title: "Voucher Giảm 20% Đơn Từ 60k", minOrder: 60000, maxDiscount: 25000 },
+  BREW50: { title: "Siêu Voucher Giảm 50% VIP", minOrder: 120000, maxDiscount: 60000 },
+  BREWCOZY: { title: "Ưu đãi Giờ vàng giảm 15% toàn menu", minOrder: 0, maxDiscount: 20000 },
+  BREWLITE10: { title: "Voucher Giảm 10% Chào Mừng", minOrder: 0, maxDiscount: 15000 },
+  WELCOME20: { title: "Voucher Giảm 20% Khách Hàng Mới", minOrder: 50000, maxDiscount: 25000 },
+};
+
 export default function CartPage() {
   const {
     items,
@@ -653,10 +898,19 @@ export default function CartPage() {
     cartCount,
     cartTotal,
     addItem,
+    appliedPromo,
+    setAppliedPromo,
   } = useCartStore();
 
+  const { user, refreshProfile } = useAuthStore();
   const [hydrated, setHydrated] = useState(false);
-  const [appliedPromo, setAppliedPromo] = useState<string | null>(null);
+  const [isVoucherModalOpen, setIsVoucherModalOpen] = useState(false);
+  const [availableVouchers, setAvailableVouchers] = useState<VoucherItem[]>([
+    { code: "BREWCOZY", description: "Giờ vàng -15%", discountPercent: 15, minOrderAmount: 0, maxDiscountAmount: 25000, quantity: 1 },
+    { code: "BREW10", description: "Voucher Giảm 10% Toàn Đơn", discountPercent: 10, minOrderAmount: 0, maxDiscountAmount: 15000, quantity: 1 },
+    { code: "BREW20", description: "Voucher Giảm 20% Đơn Từ 60k", discountPercent: 20, minOrderAmount: 60000, maxDiscountAmount: 25000, quantity: 1 },
+    { code: "BREW50", description: "Siêu Voucher Giảm 50% VIP", discountPercent: 50, minOrderAmount: 120000, maxDiscountAmount: 60000, quantity: 1 },
+  ]);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
   const router = useRouter();
@@ -670,20 +924,148 @@ export default function CartPage() {
 
   useEffect(() => {
     setHydrated(true);
+    refreshProfile?.();
   }, []);
+
+  const vouchersKey = useMemo(() => {
+    return (user?.vouchers || []).map((v) => `${v.code}:${v.quantity}`).join(",");
+  }, [user?.vouchers]);
+
+  useEffect(() => {
+    const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
+    fetch(`${apiBase}/inventory/pricing-config`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        let baseList: VoucherItem[] = [
+          { code: "BREWCOZY", description: "Giờ vàng -15%", discountPercent: 15, minOrderAmount: 0, maxDiscountAmount: 25000, quantity: 1 },
+          { code: "BREW10", description: "Voucher Giảm 10% Toàn Đơn", discountPercent: 10, minOrderAmount: 0, maxDiscountAmount: 15000, quantity: 1 },
+          { code: "BREW20", description: "Voucher Giảm 20% Đơn Từ 60k", discountPercent: 20, minOrderAmount: 60000, maxDiscountAmount: 25000, quantity: 1 },
+          { code: "BREW50", description: "Siêu Voucher Giảm 50% VIP", discountPercent: 50, minOrderAmount: 120000, maxDiscountAmount: 60000, quantity: 1 },
+        ];
+        if (data && Array.isArray(data.vouchers) && data.vouchers.length > 0) {
+          baseList = data.vouchers.map((v: VoucherItem) => {
+            const meta = VOUCHER_METADATA[v.code.toUpperCase()];
+            return {
+              ...v,
+              description: meta?.title || v.description,
+              minOrderAmount: meta?.minOrder !== undefined ? meta.minOrder : v.minOrderAmount || 0,
+              quantity: v.quantity || 1,
+              maxDiscountAmount: (v.maxDiscountAmount !== undefined && v.maxDiscountAmount !== null) ? Number(v.maxDiscountAmount) : (meta?.maxDiscount || 25000),
+            };
+          });
+        }
+
+        // Đồng bộ cộng dồn các mã người dùng đã đổi
+        const userVouchers = user?.vouchers || [];
+        const merged = [...baseList];
+        userVouchers.forEach((uv) => {
+          const meta = VOUCHER_METADATA[uv.code.toUpperCase()];
+          const maxCap = (uv.maxDiscountAmount !== undefined && uv.maxDiscountAmount !== null) ? Number(uv.maxDiscountAmount) : (meta?.maxDiscount || (uv.discountPercent <= 10 ? 15000 : uv.discountPercent <= 20 ? 25000 : 60000));
+          const minReq = meta?.minOrder !== undefined ? meta.minOrder : uv.minOrderAmount || 0;
+          const title = meta?.title || `Ưu đãi ${uv.code} (-${uv.discountPercent}%)`;
+          const idx = merged.findIndex((m) => m.code === uv.code);
+          if (idx >= 0) {
+            merged[idx] = {
+              ...merged[idx],
+              description: title,
+              quantity: uv.quantity,
+              minOrderAmount: minReq,
+              maxDiscountAmount: maxCap,
+            };
+          } else {
+            merged.push({
+              code: uv.code,
+              description: title,
+              discountPercent: uv.discountPercent,
+              minOrderAmount: minReq,
+              maxDiscountAmount: maxCap,
+              quantity: uv.quantity,
+            });
+          }
+        });
+
+        setAvailableVouchers(merged);
+      })
+      .catch(() => {
+        // Fallback to static vouchers
+      });
+  }, [vouchersKey]);
+
+  const handleRedeemSuccess = (code: string, newQty?: number) => {
+    setAvailableVouchers((prev) => {
+      const meta = VOUCHER_METADATA[code.toUpperCase()];
+      const idx = prev.findIndex((v) => v.code === code);
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = {
+          ...next[idx],
+          description: meta?.title || next[idx].description,
+          minOrderAmount: meta?.minOrder !== undefined ? meta.minOrder : next[idx].minOrderAmount,
+          maxDiscountAmount: meta?.maxDiscount || next[idx].maxDiscountAmount,
+          quantity: typeof newQty === "number" ? newQty : (next[idx].quantity || 1) + 1,
+        };
+        return next;
+      } else {
+        const reward =
+          code === "BREW50"
+            ? { pct: 50, min: 120000, max: 60000 }
+            : code === "BREW20"
+            ? { pct: 20, min: 60000, max: 25000 }
+            : { pct: 10, min: 0, max: 15000 };
+        return [
+          ...prev,
+          {
+            code,
+            description: meta?.title || `Ưu đãi ${code}`,
+            discountPercent: reward.pct,
+            minOrderAmount: reward.min,
+            maxDiscountAmount: reward.max,
+            quantity: typeof newQty === "number" ? newQty : 1,
+          },
+        ];
+      }
+    });
+  };
 
   const count = hydrated ? cartCount() : 0;
   const subtotal = hydrated ? cartTotal() : 0;
   const displayItems = hydrated ? items : [];
 
-  // Calculate discount based on promo code
-  const discountRate =
-    appliedPromo === "BREWCOZY"
-      ? 0.15
-      : appliedPromo === "BREW10"
-        ? 0.1
-        : 0;
-  const discountAmount = Math.round(subtotal * discountRate);
+  // Calculate discount based on dynamic promo code configured by Admin (or fallback)
+  const matchedVoucher = availableVouchers.find((v) => v.code === appliedPromo);
+  const discountRate = matchedVoucher
+    ? matchedVoucher.discountPercent / 100
+    : appliedPromo === "BREW50"
+      ? 0.5
+      : appliedPromo === "BREW20"
+        ? 0.2
+        : appliedPromo === "BREWCOZY"
+          ? 0.15
+          : appliedPromo === "BREW10" || appliedPromo === "BREWLITE10"
+            ? 0.1
+            : 0;
+
+  const minOrderReq = matchedVoucher?.minOrderAmount ?? (
+    appliedPromo === "BREW50" ? 120000 : appliedPromo === "BREW20" ? 60000 : 0
+  );
+
+  const maxDiscountCap = matchedVoucher?.maxDiscountAmount ?? (
+    appliedPromo === "BREW50"
+      ? 60000
+      : appliedPromo === "BREW20"
+        ? 25000
+        : appliedPromo === "BREW10" || appliedPromo === "BREWLITE10"
+          ? 15000
+          : appliedPromo === "BREWCOZY"
+            ? 25000
+            : Infinity
+  );
+
+  let discountAmount = 0;
+  if (appliedPromo && subtotal >= minOrderReq) {
+    const rawDiscount = Math.round(subtotal * discountRate);
+    discountAmount = Math.min(rawDiscount, maxDiscountCap);
+  }
 
   // Match the product for editing in modal
   const editingProduct: Product | null = useMemo(() => {
@@ -726,6 +1108,18 @@ export default function CartPage() {
         })),
         discountCode: appliedPromo || undefined,
       };
+      // Tự động hủy đơn nháp cũ nếu khách hàng quay lại giỏ và bấm đặt lại (tránh sinh đơn ảo rác)
+      if (typeof window !== "undefined") {
+        const prevPendingId = sessionStorage.getItem("brewlite_active_pending_order");
+        if (prevPendingId) {
+          apiFetch(`/orders/${prevPendingId}/status`, {
+            method: "PATCH",
+            body: JSON.stringify({ status: "CANCELLED" }),
+          }).catch(() => {});
+          sessionStorage.removeItem("brewlite_active_pending_order");
+        }
+      }
+
       // apiFetch tự động đính kèm Authorization: Bearer <token>
       const res = await apiFetch("/orders", {
         method: "POST",
@@ -736,6 +1130,30 @@ export default function CartPage() {
         throw new Error(err?.message ?? `Lỗi máy chủ (${res.status})`);
       }
       const data = await res.json();
+      if (typeof window !== "undefined" && data?.orderId) {
+        sessionStorage.setItem("brewlite_active_pending_order", String(data.orderId));
+        try {
+          const itemMeta = displayItems.map((item) => ({
+            productId: item.id,
+            productName: item.name,
+            size: item.size || "M",
+            temp: item.temp,
+            temperature: item.temperature,
+            iceLevel: item.iceLevel,
+            sugarLevel: item.sugarLevel,
+            servingStyle: item.servingStyle,
+            isBakery: item.isBakery,
+            toppings: item.toppings,
+            notes: item.notes,
+          }));
+          localStorage.setItem(
+            `order_customizations_${data.orderId}`,
+            JSON.stringify(itemMeta)
+          );
+        } catch {
+          // ignore storage error
+        }
+      }
       // Giữ nguyên giỏ hàng cho đến khi thanh toán thành công ở màn hình Checkout
       router.push(`/checkout?orderId=${data.orderId}`);
     } catch (e: unknown) {
@@ -754,9 +1172,16 @@ export default function CartPage() {
   ) => {
     if (!editingItem) return;
     const key = getKey(editingItem);
+    const isBakery = customization.isBakery || isBakeryProduct(editingItem);
+    const isHot = customization.temp === "hot";
     updateCartItem(key, {
-      size: customization.size,
+      size: isBakery ? undefined : customization.size,
       temp: customization.temp,
+      temperature: isHot ? "HOT" : "COLD",
+      servingStyle: customization.servingStyle,
+      isBakery,
+      iceLevel: isBakery || isHot ? undefined : customization.ice,
+      sugarLevel: isBakery ? undefined : customization.sweetness,
       toppings: customization.toppings.map((t) => t.name),
       notes: customization.notes,
       quantity: customization.quantity,
@@ -770,7 +1195,10 @@ export default function CartPage() {
       id: s.id,
       name: s.name,
       price: s.price,
-      temp: "hot",
+      temp: "iced",
+      temperature: "COLD",
+      servingStyle: "Dùng ngay",
+      isBakery: true,
       quantity: 1,
       imageUrl: s.img,
     });
@@ -904,14 +1332,21 @@ export default function CartPage() {
               <LocationCard />
               <PromoCard
                 appliedCode={appliedPromo}
+                appliedPercent={Math.round(discountRate * 100)}
+                vouchers={availableVouchers}
+                matchedVoucher={matchedVoucher}
+                subtotal={subtotal}
+                discountAmount={discountAmount}
                 onApply={(code) => setAppliedPromo(code)}
                 onRemove={() => setAppliedPromo(null)}
+                onOpenModal={() => setIsVoucherModalOpen(true)}
               />
               <SummaryCard
                 subtotal={subtotal}
                 itemCount={count}
                 discount={discountAmount}
                 promoCode={appliedPromo}
+                matchedVoucher={matchedVoucher}
                 onCheckout={handleCheckout}
                 isLoading={checkoutLoading}
                 error={checkoutError}
@@ -931,7 +1366,17 @@ export default function CartPage() {
           actionLabel={"Cập nhật món".normalize("NFC")}
           initialCustomization={{
             size: (editingItem.size as "S" | "M" | "L") || "M",
-            temp: (editingItem.temp as "iced" | "hot") || "iced",
+            temp:
+              editingItem.temperature === "HOT" ||
+              editingItem.temp?.toLowerCase() === "hot" ||
+              editingItem.servingStyle === "Hâm nóng" ||
+              editingItem.servingStyle === "Hâm nóng giòn"
+                ? "hot"
+                : "iced",
+            servingStyle: editingItem.servingStyle,
+            isBakery: editingItem.isBakery || isBakeryProduct(editingItem),
+            sweetness: editingItem.sugarLevel || "100%",
+            ice: editingItem.iceLevel || "Đá thường (100%)",
             toppings: editingItem.toppings || [],
             notes: editingItem.notes || "",
             quantity: editingItem.quantity || 1,
@@ -1047,13 +1492,31 @@ export default function CartPage() {
             </span>
             <div className="flex items-center gap-1.5">
               <span className="text-[14px] font-bold">
-                {vnd(subtotal - discountAmount + Math.round((subtotal - discountAmount) * 0.08))}
+                {vnd(
+                  Math.floor(
+                    (Math.max(0, subtotal - discountAmount) +
+                      Math.floor(Math.max(0, subtotal - discountAmount) * 0.08)) /
+                      1000
+                  ) * 1000
+                )}
               </span>
               <ArrowRight size={16} strokeWidth={2.5} />
             </div>
           </button>
         </div>
       )}
+
+      {/* ── Voucher Modal (Xem tất cả & Đổi Hạt Vàng) ── */}
+      <VoucherModal
+        isOpen={isVoucherModalOpen}
+        onClose={() => setIsVoucherModalOpen(false)}
+        vouchers={availableVouchers}
+        appliedCode={appliedPromo}
+        subtotal={subtotal}
+        onSelectVoucher={(code) => setAppliedPromo(code)}
+        onRemoveVoucher={() => setAppliedPromo(null)}
+        onRedeemSuccess={handleRedeemSuccess}
+      />
 
       {/* Footer */}
       <Footer />
