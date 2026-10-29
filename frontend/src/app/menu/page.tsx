@@ -3,252 +3,22 @@
 import React, { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
 import Image from "next/image";
+import { Flame, Snowflake, Wheat } from "lucide-react";
 import Footer from "../components/Footer";
 import Header from "../components/Header";
 import ProductDetailModal, {
   CustomizationDetails,
 } from "../components/ProductDetailModal";
-import { useCartStore } from "../store/cartStore";
+import { useCartStore, isBakeryProduct } from "../store/cartStore";
 
-export interface Product {
-  id: number;
-  name: string;
-  description: string | null;
-  imageUrl: string | null;
-  basePrice: number;
-  category?: string;
-  rating?: number;
-  tag?: string;
-  chips?: {
-    temps?: string[];
-    note?: string;
-  };
-}
-
-// CartItem type is now owned by the Zustand store.
-// Re-export it here so existing imports don't break.
-export type { CartItem } from "../store/cartStore";
-
-/**
- * Standardize Stitch image URLs by stripping any existing query
- * and appending high-resolution query parameters as required by design.md:
- * [url_gốc_không_có_query]?auto=format&fit=crop&w=1200&q=85
- */
-export function normalizeStitchImageUrl(
-  url: string | null | undefined,
-  width = 1200,
-  quality = 85
-): string {
-  if (!url) return "";
-  if (url.startsWith("/") || !url.startsWith("http")) return url;
-  const baseUrl = url.split("?")[0];
-  return `${baseUrl}?auto=format&fit=crop&w=${width}&q=${quality}`;
-}
-
-// Real Product Menu with Local Images & NFC normalization
-export const DEFAULT_PRODUCTS: Product[] = [
-  {
-    id: 1,
-    name: "Cà phê Đen".normalize("NFC"),
-    description:
-      "Chiết xuất từ hạt Robusta và Arabica rang đậm mộc, mang vị đắng êm sâu lắng, hậu vị thanh nhẹ và hương thơm nồng nàn nguyên bản.".normalize("NFC"),
-    imageUrl: "/images/products/ca-phe-den.png",
-    basePrice: 29000,
-    category: "vietnamese",
-    rating: 4.9,
-    tag: "Đậm đà",
-    chips: { temps: ["Hot", "Iced"], note: "Robusta mộc" },
-  },
-  {
-    id: 2,
-    name: "Cà phê Sữa".normalize("NFC"),
-    description:
-      "Sự kết hợp kinh điển giữa cà phê pha phin truyền thống đậm đà và sữa đặc sánh mịn. Từng giọt cà phê loang tự nhiên qua đá viên tạo nên vị ngọt béo, đắng dịu hài hòa.".normalize("NFC"),
-    imageUrl: "/images/products/ca-phe-sua.png",
-    basePrice: 35000,
-    category: "vietnamese",
-    rating: 5.0,
-    tag: "Truyền thống",
-    chips: { temps: ["Hot", "Iced"], note: "Phin truyền thống" },
-  },
-  {
-    id: 3,
-    name: "Cà phê Bạc Xỉu".normalize("NFC"),
-    description:
-      "Dòng sữa tươi thanh béo quyện cùng chút sữa đặc ngọt dịu, điểm xuyết một lớp cà phê phin thơm nhẹ trên bề mặt, mang hương vị dịu êm, ngậy béo và dễ uống.".normalize("NFC"),
-    imageUrl: "/images/products/ca-phe-bac-xiu.png",
-    basePrice: 39000,
-    category: "vietnamese",
-    rating: 4.9,
-    tag: "Béo ngậy",
-    chips: { temps: ["Hot", "Iced"], note: "Dịu ngọt êm ái" },
-  },
-  {
-    id: 4,
-    name: "Cà phê Muối".normalize("NFC"),
-    description:
-      "Nền cà phê sữa đá đậm vị hòa quyện cùng lớp kem bọt muối biển sánh mịn, béo mặn bồng bềnh bên trên, rắc nhẹ bột cacao nguyên chất tạo điểm nhấn tròn vị.".normalize("NFC"),
-    imageUrl: "/images/products/ca-phe-muoi.png",
-    basePrice: 42000,
-    category: "vietnamese",
-    rating: 5.0,
-    tag: "Đặc sản",
-    chips: { temps: ["Iced"], note: "Kem muối biển" },
-  },
-  {
-    id: 5,
-    name: "Iced Caramel Macchiato".normalize("NFC"),
-    description:
-      "Cà phê espresso phân tầng tinh tế cùng sữa tươi mát lạnh và siro vani ngọt dịu, phủ lớp bọt sữa dày mịn đan xen những đường sốt caramel vàng óng thơm ngậy.".normalize("NFC"),
-    imageUrl: "/images/products/iced-caramel-macchiato.png",
-    basePrice: 49000,
-    category: "espresso",
-    rating: 4.9,
-    tag: "Signature",
-    chips: { temps: ["Hot", "Iced"], note: "Caramel vàng óng" },
-  },
-  {
-    id: 6,
-    name: "Matcha Latte Uji".normalize("NFC"),
-    description:
-      "Bột trà xanh Uji cao cấp từ Nhật Bản được đánh bọt mịn màng, hòa cùng dòng sữa tươi béo nhẹ. Thức uống mang sắc xanh ngọc bích, vị chát thanh dịu và hậu ngọt êm ái.".normalize("NFC"),
-    imageUrl: "/images/products/matcha-latte.png",
-    basePrice: 49000,
-    category: "tea",
-    rating: 4.9,
-    tag: "Uji Kyoto",
-    chips: { temps: ["Hot", "Iced"], note: "100% Ceremonial" },
-  },
-  {
-    id: 7,
-    name: "Trà Đào Cam Sả".normalize("NFC"),
-    description:
-      "Nền trà đen ủ lạnh ngát hương sả tươi tự nhiên, kết hợp cùng vị chua ngọt sảng khoái của tép cam vàng tươi và miếng đào giòn mọng, giúp thanh nhiệt tức thì.".normalize("NFC"),
-    imageUrl: "/images/products/tra-dao-cam-sa.png",
-    basePrice: 45000,
-    category: "tea",
-    rating: 4.8,
-    tag: "Thanh nhiệt",
-    chips: { temps: ["Iced"], note: "Cam vàng & Đào tươi" },
-  },
-  {
-    id: 8,
-    name: "Bánh Pain au Chocolat".normalize("NFC"),
-    description:
-      "Lớp vỏ bánh ngàn lớp xốp giòn ôm trọn hai thanh sô-cô-la đen đậm vị tan chảy ở giữa. Sự kết hợp hoàn hảo giữa độ giòn béo của bơ và vị đắng ngọt tinh tế.".normalize("NFC"),
-    imageUrl: "/images/products/pain-au-chocolat.png",
-    basePrice: 39000,
-    category: "bakery",
-    rating: 4.9,
-    tag: "Bơ Pháp & Socola",
-    chips: { note: "🔥 Nướng thơm giòn" },
-  },
-  {
-    id: 9,
-    name: "Basque Burnt Cheesecake".normalize("NFC"),
-    description:
-      "Bánh phô mai nướng cháy xém bề mặt theo phong cách xứ Basque, đượm hương caramel nướng đặc trưng. Cốt bánh mềm ngậy, mịn tan và có hậu chua thanh nhẹ từ kem phô mai.".normalize("NFC"),
-    imageUrl: "/images/products/basque-burnt-cheesecake.png",
-    basePrice: 45000,
-    category: "bakery",
-    rating: 5.0,
-    tag: "Xứ Basque",
-    chips: { note: "✨ Phô mai nướng cháy" },
-  },
-  {
-    id: 10,
-    name: "Classic Tiramisu".normalize("NFC"),
-    description:
-      "Cốt bánh ladyfinger mềm mại thấm đẫm cà phê espresso đậm đặc, xen kẽ các lớp kem phô mai mascarpone béo mịn và phủ bề mặt bằng lớp bột cacao thơm bùi, đắng nhẹ.".normalize("NFC"),
-    imageUrl: "/images/products/classic-tiramisu.png",
-    basePrice: 49000,
-    category: "bakery",
-    rating: 5.0,
-    tag: "Ý truyền thống",
-    chips: { note: "☕ Thấm đẫm Espresso" },
-  },
-];
-
-export function getProductMetadata(name: string): {
-  category: string;
-  tag?: string;
-  rating?: number;
-  chips?: { temps?: string[]; note?: string };
-} {
-  const n = name.toLowerCase();
-  if (
-    n.includes("đen") ||
-    n.includes("sữa") ||
-    n.includes("bạc xỉu") ||
-    n.includes("muối") ||
-    n.includes("phin")
-  ) {
-    return {
-      category: "vietnamese",
-      tag: n.includes("muối")
-        ? "Đặc sản"
-        : n.includes("bạc xỉu")
-        ? "Béo ngậy"
-        : n.includes("đen")
-        ? "Đậm đà"
-        : "Truyền thống",
-      rating: 4.9,
-      chips: {
-        temps: n.includes("muối") ? ["Iced"] : ["Hot", "Iced"],
-        note: "Phin Robusta",
-      },
-    };
-  }
-  if (
-    n.includes("macchiato") ||
-    n.includes("espresso") ||
-    n.includes("cappuccino") ||
-    (n.includes("latte") && !n.includes("matcha"))
-  ) {
-    return {
-      category: "espresso",
-      tag: "Signature",
-      rating: 4.9,
-      chips: { temps: ["Hot", "Iced"], note: "Espresso mộc" },
-    };
-  }
-  if (n.includes("matcha") || n.includes("trà") || n.includes("tea")) {
-    return {
-      category: "tea",
-      tag: n.includes("matcha") ? "Uji Kyoto" : "Thanh nhiệt",
-      rating: 4.8,
-      chips: {
-        temps: n.includes("matcha") ? ["Hot", "Iced"] : ["Iced"],
-        note: n.includes("matcha") ? "100% Ceremonial" : "Cam đào tươi",
-      },
-    };
-  }
-  if (
-    n.includes("bánh") ||
-    n.includes("croissant") ||
-    n.includes("pain") ||
-    n.includes("cake") ||
-    n.includes("tiramisu") ||
-    n.includes("cheesecake")
-  ) {
-    return {
-      category: "bakery",
-      tag: n.includes("cheesecake")
-        ? "Xứ Basque"
-        : n.includes("tiramisu")
-        ? "Ý truyền thống"
-        : "Nướng giòn",
-      rating: 5.0,
-      chips: { note: "🔥 Nướng thơm giòn" },
-    };
-  }
-  return {
-    category: "vietnamese",
-    tag: "Phổ biến",
-    rating: 4.8,
-    chips: { temps: ["Hot", "Iced"] },
-  };
-}
+export type { Product, ProductRecipeItem } from "../utils/productUtils";
+import {
+  type Product,
+  type ProductRecipeItem,
+  DEFAULT_PRODUCTS,
+  normalizeStitchImageUrl,
+  getProductMetadata,
+} from "../utils/productUtils";
 
 const CATEGORIES = [
   { id: "all", label: "All Items" },
@@ -298,7 +68,7 @@ export default function MenuPage() {
           if (Array.isArray(data) && data.length > 0) {
             setProducts(
               data.map((p) => {
-                const meta = getProductMetadata(p.name);
+                const meta = getProductMetadata(p.name, p.category);
                 return {
                   ...p,
                   name: p.name.normalize("NFC"),
@@ -346,7 +116,7 @@ export default function MenuPage() {
 
       const matchTemp =
         tempFilter === "all" ||
-        (p.chips?.temps && p.chips.temps.some((t) => t.toLowerCase() === tempFilter.toLowerCase())) ||
+        (p.chips?.temps && p.chips.temps.some((t: string) => t.toLowerCase() === tempFilter.toLowerCase())) ||
         (tempFilter === "oat" && (p.name.toLowerCase().includes("oat") || p.description?.toLowerCase().includes("oat")));
 
       return matchCat && matchSearch && matchTemp;
@@ -375,32 +145,23 @@ export default function MenuPage() {
     product: Product,
     customization: CustomizationDetails
   ) => {
+    if (product.isOutOfStock) return;
+    const isBakery = customization.isBakery ?? isBakeryProduct(product);
+    const isHot = customization.temp === "hot";
     addItem({
       id: product.id,
       name: product.name,
       price: customization.unitPrice,
       temp: customization.temp,
+      temperature: isHot ? "HOT" : "COLD",
+      servingStyle: customization.servingStyle,
+      isBakery,
+      iceLevel: isBakery || isHot ? undefined : customization.ice,
+      sugarLevel: isBakery ? undefined : customization.sweetness,
       quantity: customization.quantity,
-      size: customization.size,
+      size: isBakery ? undefined : customization.size,
       toppings: customization.toppings.map((t) => t.name),
       notes: customization.notes,
-      imageUrl: product.imageUrl,
-    });
-
-    setBadgeAnimated(true);
-    setTimeout(() => setBadgeAnimated(false), 300);
-  };
-
-  const handleAddToCart = (product: Product) => {
-    const defaultTemp = product.chips?.temps ? product.chips.temps[0] : "Iced";
-    const temp = productTemps[product.id] || defaultTemp;
-
-    addItem({
-      id: product.id,
-      name: product.name,
-      price: product.basePrice,
-      temp,
-      quantity: 1,
       imageUrl: product.imageUrl,
     });
 
@@ -538,47 +299,68 @@ export default function MenuPage() {
                   <button
                     type="button"
                     onClick={() => setTempFilter("iced")}
-                    className={`filter-pill px-3 py-1.5 rounded-full text-[11px] font-bold transition-all ${
+                    className={`filter-pill px-3 py-1.5 rounded-full text-[11px] font-bold transition-all inline-flex items-center gap-1.5 ${
                       tempFilter === "iced"
                         ? "bg-[#2c1810] text-white"
                         : "bg-[#f3ede9] text-[#504440] hover:bg-[#ede7e3]"
                     }`}
                   >
-                    🧊 Iced
+                    <Snowflake
+                      size={13}
+                      strokeWidth={2.2}
+                      className={
+                        tempFilter === "iced" ? "text-white" : "text-[#504440]"
+                      }
+                    />
+                    <span>Iced</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => setTempFilter("hot")}
-                    className={`filter-pill px-3 py-1.5 rounded-full text-[11px] font-bold transition-all ${
+                    className={`filter-pill px-3 py-1.5 rounded-full text-[11px] font-bold transition-all inline-flex items-center gap-1.5 ${
                       tempFilter === "hot"
                         ? "bg-[#2c1810] text-white"
                         : "bg-[#f3ede9] text-[#504440] hover:bg-[#ede7e3]"
                     }`}
                   >
-                    ☕ Hot
+                    <Flame
+                      size={13}
+                      strokeWidth={2.2}
+                      className={
+                        tempFilter === "hot" ? "text-white" : "text-[#504440]"
+                      }
+                    />
+                    <span>Hot</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => setTempFilter("oat")}
-                    className={`filter-pill px-3 py-1.5 rounded-full text-[11px] font-bold transition-all ${
+                    className={`filter-pill px-3 py-1.5 rounded-full text-[11px] font-bold transition-all inline-flex items-center gap-1.5 ${
                       tempFilter === "oat"
                         ? "bg-[#2c1810] text-white"
                         : "bg-[#f3ede9] text-[#504440] hover:bg-[#ede7e3]"
                     }`}
                   >
-                    🌾 Oat
+                    <Wheat
+                      size={13}
+                      strokeWidth={2.2}
+                      className={
+                        tempFilter === "oat" ? "text-white" : "text-[#504440]"
+                      }
+                    />
+                    <span>Oat</span>
                   </button>
                 </div>
               </div>
             </div>
 
-            {/* Asymmetrical Feature Hero Vignette (Barista Spotlight - Original Stitch URL) */}
+            {/* Asymmetrical Feature Hero Vignette */}
             <div className="lg:col-span-5 relative">
               <div
                 className="relative rounded-3xl overflow-hidden shadow-xl bg-[#ede7e3] aspect-4/3 group cursor-pointer"
                 onClick={() =>
                   handleOpenDetail(
-                    products.find((p) => p.id === 2) || DEFAULT_PRODUCTS[1]
+                    products.find((p) => p.id === 4) || DEFAULT_PRODUCTS[3]
                   )
                 }
                 title={"Xem chi tiết & Tùy chọn Cà Phê Muối".normalize("NFC")}
@@ -656,7 +438,7 @@ export default function MenuPage() {
           <div className="flex items-center gap-2 whitespace-nowrap" id="categoryTabs">
             {CATEGORIES.map((cat) => {
               const isActive = selectedCategory === cat.id;
-              const count =
+              const catCount =
                 cat.id === "all"
                   ? products.length
                   : products.filter((p) => p.category === cat.id).length;
@@ -673,7 +455,7 @@ export default function MenuPage() {
                   }`}
                 >
                   <span>{cat.label}</span>
-                  {count > 0 && (
+                  {catCount > 0 && (
                     <span
                       className={`text-xs px-1.5 py-0.2 rounded-full ${
                         isActive
@@ -681,7 +463,7 @@ export default function MenuPage() {
                           : "bg-[#d3c3be] text-[#2c1810]"
                       }`}
                     >
-                      {count}
+                      {catCount}
                     </span>
                   )}
                 </button>
@@ -709,7 +491,7 @@ export default function MenuPage() {
           </div>
         </div>
 
-        {/* ── PRODUCT GRID: 8 HANDCRAFTED ITEMS WITH 100% STITCH IMAGES ── */}
+        {/* ── PRODUCT GRID ── */}
         {isLoading ? (
           /* Skeleton Loading */
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
@@ -757,7 +539,7 @@ export default function MenuPage() {
             </button>
           </div>
         ) : (
-          /* High-DPI Retina Product Grid with 100% Original Stitch Images */
+          /* High-DPI Retina Product Grid */
           <div
             className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6"
             id="productGrid"
@@ -765,12 +547,15 @@ export default function MenuPage() {
             {filteredProducts.map((product, idx) => {
               const defaultTemp = product.chips?.temps ? product.chips.temps[0] : "Iced";
               const currentTemp = productTemps[product.id] || defaultTemp;
+              const isSoldOut = Boolean(product.isOutOfStock);
 
               return (
                 <article
                   key={product.id}
-                  className="product-card flex flex-col justify-between bg-[#f8f2ee] rounded-2xl overflow-hidden shadow-sm hover:shadow-md transition-all duration-300 p-3.5 group border border-[#2c1810]/5 cursor-pointer"
-                  onClick={() => handleOpenDetail(product)}
+                  className={`product-card flex flex-col justify-between bg-[#f8f2ee] rounded-2xl overflow-hidden shadow-sm hover:shadow-md transition-all duration-300 p-3.5 group border border-[#2c1810]/5 ${
+                    isSoldOut ? "opacity-75 cursor-not-allowed" : "cursor-pointer"
+                  }`}
+                  onClick={() => !isSoldOut && handleOpenDetail(product)}
                 >
                   <div className="relative w-full aspect-square rounded-xl overflow-hidden bg-[#ede7e3]">
                     <Image
@@ -784,15 +569,28 @@ export default function MenuPage() {
                       unoptimized
                       loading={idx < 4 ? "eager" : "lazy"}
                       sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 25vw"
-                      className="object-cover group-hover:scale-105 transition-transform duration-500"
+                      className={`object-cover transition-transform duration-500 ${
+                        isSoldOut ? "grayscale" : "group-hover:scale-105"
+                      }`}
                     />
 
-                    {product.tag && (
-                      <div className="absolute top-2 left-2 z-10 flex flex-col gap-1 font-body">
-                        <span className="bg-[#febc85] text-[#78491d] text-[11px] px-2 py-0.5 rounded-full font-semibold shadow-sm">
-                          {product.tag}
+                    {isSoldOut ? (
+                      <div className="absolute inset-0 bg-[#2c1810]/60 backdrop-blur-[2px] flex items-center justify-center z-20">
+                        <span className="px-4 py-1.5 rounded-full bg-[#991B1B] text-white text-[12px] font-bold uppercase tracking-wider shadow-lg flex items-center gap-1.5">
+                          <span className="material-symbols-outlined text-sm">
+                            block
+                          </span>
+                          Hết hàng (Sold Out)
                         </span>
                       </div>
+                    ) : (
+                      product.tag && (
+                        <div className="absolute top-2 left-2 z-10 flex flex-col gap-1 font-body">
+                          <span className="bg-[#febc85] text-[#78491d] text-[11px] px-2 py-0.5 rounded-full font-semibold shadow-sm">
+                            {product.tag}
+                          </span>
+                        </div>
+                      )
                     )}
 
                     <div className="absolute bottom-2 right-2 z-10 bg-white/90 backdrop-blur-md px-2 py-0.5 rounded-full flex items-center gap-1 shadow-sm font-body">
@@ -819,11 +617,15 @@ export default function MenuPage() {
                     <div className="flex items-center gap-1 mt-1.5 font-body">
                       {product.chips?.temps && product.chips.temps.length > 0 ? (
                         <>
-                          {product.chips.temps.map((temp) => (
+                          {product.chips.temps.map((temp: string) => (
                             <button
                               key={temp}
                               type="button"
-                              onClick={() => handleSelectTemp(product.id, temp)}
+                              disabled={isSoldOut}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleSelectTemp(product.id, temp);
+                              }}
                               className={`temp-chip px-2.5 py-0.5 rounded-full text-xs font-semibold transition-all ${
                                 currentTemp === temp
                                   ? "bg-[#2c1810] text-white"
@@ -856,17 +658,28 @@ export default function MenuPage() {
 
                     <button
                       type="button"
-                      className="h-10 px-4 rounded-xl bg-[#2c1810] hover:bg-[#845326] text-white flex items-center gap-1.5 transition-all active:scale-95 shadow-sm text-[13px] font-semibold font-body cursor-pointer"
+                      disabled={isSoldOut}
+                      className={`h-10 px-4 rounded-xl flex items-center gap-1.5 transition-all shadow-sm text-[13px] font-semibold font-body ${
+                        isSoldOut
+                          ? "bg-[#d3c3be] text-[#504440] cursor-not-allowed"
+                          : "bg-[#2c1810] hover:bg-[#845326] text-white active:scale-95 cursor-pointer"
+                      }`}
                       onClick={(e) => {
                         e.stopPropagation();
-                        handleOpenDetail(product);
+                        if (!isSoldOut) handleOpenDetail(product);
                       }}
-                      title={"Tùy chọn món & Thêm vào giỏ".normalize("NFC")}
+                      title={
+                        isSoldOut
+                          ? "Nguyên liệu tạm hết"
+                          : "Tùy chọn món & Thêm vào giỏ".normalize("NFC")
+                      }
                     >
                       <span className="material-symbols-outlined text-lg">
-                        tune
+                        {isSoldOut ? "block" : "tune"}
                       </span>
-                      <span>{"Tùy chọn".normalize("NFC")}</span>
+                      <span>
+                        {isSoldOut ? "Hết hàng" : "Tùy chọn".normalize("NFC")}
+                      </span>
                     </button>
                   </div>
                 </article>
