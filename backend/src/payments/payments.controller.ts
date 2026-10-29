@@ -1,10 +1,14 @@
 import {
   Body,
   Controller,
+  Get,
   Headers,
   HttpCode,
   HttpStatus,
+  Param,
+  ParseIntPipe,
   Post,
+  Query,
   Request,
   UseGuards,
 } from '@nestjs/common';
@@ -21,7 +25,7 @@ export class PaymentsController {
   constructor(private readonly paymentsService: PaymentsService) {}
 
   /**
-   * POST /payments — Thanh toán đơn hàng không tiền mặt
+   * POST /payments — Thanh toán đơn hàng không tiền mặt (Mock Gateway / Kịch bản Demo)
    * Yêu cầu JWT Bearer Token, kiểm tra quyền sở hữu đơn hàng
    * Hỗ trợ header Idempotency-Key và cờ simulateFailure để demo
    */
@@ -35,4 +39,62 @@ export class PaymentsController {
   ) {
     return this.paymentsService.processPayment(dto, req.user.userId, idempotencyKey);
   }
+
+  /**
+   * POST /payments/zalopay/create — Tạo liên kết thanh toán / QR trên ZaloPay Sandbox
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post('zalopay/create')
+  @HttpCode(HttpStatus.OK)
+  createZaloPayOrder(
+    @Request() req: AuthRequest,
+    @Body('orderId', ParseIntPipe) orderId: number,
+  ) {
+    return this.paymentsService.createZaloPayOrder(orderId, req.user.userId);
+  }
+
+  /**
+   * POST /payments/zalopay/callback — Tiếp nhận IPN Webhook từ máy chủ ZaloPay
+   */
+  @Post('zalopay/callback')
+  @HttpCode(HttpStatus.OK)
+  handleZaloPayCallback(@Body() body: { data: string; mac: string; type?: number }) {
+    return this.paymentsService.handleZaloPayCallback(body);
+  }
+
+  /**
+   * GET /payments/zalopay/status/:orderId — Kiểm tra trạng thái thanh toán ZaloPay (Polling 3s)
+   */
+  @UseGuards(JwtAuthGuard)
+  @Get('zalopay/status/:orderId')
+  @HttpCode(HttpStatus.OK)
+  getZaloPayStatus(
+    @Request() req: AuthRequest,
+    @Param('orderId', ParseIntPipe) orderId: number,
+    @Query('appTransId') appTransId?: string,
+  ) {
+    return this.paymentsService.getZaloPayStatus(orderId, req.user.userId, appTransId);
+  }
+
+  /**
+   * POST /payments/zalopay/confirm — Xác nhận thanh toán từ Cổng ZaloPay Sandbox Gateway
+   */
+  @Post('zalopay/confirm')
+  @HttpCode(HttpStatus.OK)
+  confirmZaloPayOrder(
+    @Body('orderId', ParseIntPipe) orderId: number,
+    @Body('appTransId') appTransId?: string,
+  ) {
+    return this.paymentsService.confirmZaloPaySandbox(orderId, appTransId);
+  }
+
+  /**
+   * POST /payments/zalopay/cancel — Hủy thanh toán từ Cổng ZaloPay Sandbox Gateway
+   */
+  @Post('zalopay/cancel')
+  @HttpCode(HttpStatus.OK)
+  cancelZaloPayOrder(@Body('orderId', ParseIntPipe) orderId: number) {
+    return this.paymentsService.cancelZaloPaySandbox(orderId);
+  }
+
 }
