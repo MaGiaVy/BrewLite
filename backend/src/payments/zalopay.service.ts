@@ -90,7 +90,7 @@ export class ZaloPayService {
     const appTransId = this.generateAppTransId(orderId);
     const appTime = Date.now();
     const embedData = JSON.stringify({
-      redirecturl: 'http://localhost:3000/order-success',
+      redirecturl: `http://localhost:3000/order-confirmation?orderId=${orderId}`,
       orderId,
     });
     const item = JSON.stringify([]);
