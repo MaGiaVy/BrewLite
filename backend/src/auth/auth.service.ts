@@ -223,7 +223,7 @@ export class AuthService {
               quantity: 1,
               discountPercent: effectivePercent,
               minOrderAmount: effectiveMin,
-              maxDiscountAmount: effectiveMax,
+              ...(effectiveMax ? { maxDiscountAmount: effectiveMax } : {}),
             },
           });
         }

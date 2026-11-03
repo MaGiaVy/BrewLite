@@ -104,6 +104,24 @@ interface VoucherAdminItem {
   usageCount: number;
 }
 
+const DEFAULT_VOUCHER_CAPS: Record<string, number> = {
+  BREW10: 15000,
+  BREWLITE10: 15000,
+  BREWCOZY: 25000,
+  BREW20: 25000,
+  WELCOME20: 25000,
+  BREW50: 60000,
+};
+
+function getDefaultMaxDiscount(code: string, discountPercent: number): number {
+  const upper = (code || "").toUpperCase().trim();
+  if (DEFAULT_VOUCHER_CAPS[upper]) return DEFAULT_VOUCHER_CAPS[upper];
+  if (discountPercent <= 10) return 15000;
+  if (discountPercent <= 20) return 25000;
+  if (discountPercent <= 50) return 60000;
+  return 100000;
+}
+
 interface OrderItemDetail {
   id: number;
   productId: number;
@@ -309,7 +327,7 @@ export default function AdminPortalPage() {
   const [newVoucherDesc, setNewVoucherDesc] = useState<string>("");
   const [newVoucherPercent, setNewVoucherPercent] = useState<string>("15");
   const [newVoucherMinOrder, setNewVoucherMinOrder] = useState<string>("0");
-  const [newVoucherMaxDiscount, setNewVoucherMaxDiscount] = useState<string>("");
+  const [newVoucherMaxDiscount, setNewVoucherMaxDiscount] = useState<string>("25000");
   const [isSavingVoucher, setIsSavingVoucher] = useState<boolean>(false);
   const [editingVoucherDrafts, setEditingVoucherDrafts] = useState<
     Record<
@@ -423,7 +441,20 @@ export default function AdminPortalPage() {
       }
       if (vouchersRes.ok) {
         const vData = await vouchersRes.json();
-        setVouchers(Array.isArray(vData) ? vData : []);
+        const list = Array.isArray(vData) ? vData : [];
+        const normalized = list.map((item: VoucherAdminItem) => {
+          const cap = getDefaultMaxDiscount(item.code, item.discountPercent);
+          return {
+            ...item,
+            maxDiscountAmount:
+              item.maxDiscountAmount !== null &&
+              item.maxDiscountAmount !== undefined &&
+              Number(item.maxDiscountAmount) > 0
+                ? Number(item.maxDiscountAmount)
+                : cap,
+          };
+        });
+        setVouchers(normalized);
       }
       if (staffRes?.ok) {
         const staffData = await staffRes.json();
@@ -1119,17 +1150,20 @@ export default function AdminPortalPage() {
     }
     setIsSavingVoucher(true);
     try {
+      const pct = Number(newVoucherPercent) || 10;
+      const defaultCap = getDefaultMaxDiscount(newVoucherCode.trim().toUpperCase(), pct);
+      const effectiveMax =
+        newVoucherMaxDiscount.trim() === "" || Number(newVoucherMaxDiscount) <= 0
+          ? defaultCap
+          : Number(newVoucherMaxDiscount);
       const res = await apiFetch("/inventory/vouchers", {
         method: "POST",
         body: JSON.stringify({
           code: newVoucherCode.trim().toUpperCase(),
           description: newVoucherDesc.trim() || `Giảm ${newVoucherPercent}% đơn hàng`,
-          discountPercent: Number(newVoucherPercent) || 10,
+          discountPercent: pct,
           minOrderAmount: Number(newVoucherMinOrder) || 0,
-          maxDiscountAmount:
-            newVoucherMaxDiscount.trim() === ""
-              ? null
-              : Number(newVoucherMaxDiscount),
+          maxDiscountAmount: effectiveMax,
           isActive: true,
         }),
       });
@@ -1140,7 +1174,7 @@ export default function AdminPortalPage() {
       showToast(`✅ Đã tạo mã giảm giá ${newVoucherCode.trim().toUpperCase()} (-${newVoucherPercent}%)`);
       setNewVoucherCode("");
       setNewVoucherDesc("");
-      setNewVoucherMaxDiscount("");
+      setNewVoucherMaxDiscount("25000");
       await fetchAdminData();
     } catch (err: unknown) {
       showToast(err instanceof Error ? err.message : "Lỗi tạo mã giảm giá");
@@ -1154,17 +1188,20 @@ export default function AdminPortalPage() {
     overrideActive?: boolean
   ) => {
     const draft = editingVoucherDrafts[v.id];
+    const targetPct = draft ? Number(draft.discountPercent) || v.discountPercent : v.discountPercent;
+    const defaultCap = getDefaultMaxDiscount(v.code, targetPct);
+    const targetMax = draft
+      ? draft.maxDiscountAmount.trim() === "" || Number(draft.maxDiscountAmount) <= 0
+        ? defaultCap
+        : Number(draft.maxDiscountAmount)
+      : (v.maxDiscountAmount && Number(v.maxDiscountAmount) > 0 ? Number(v.maxDiscountAmount) : defaultCap);
     try {
       const res = await apiFetch(`/inventory/vouchers/${v.id}`, {
         method: "PATCH",
         body: JSON.stringify({
-          discountPercent: draft ? Number(draft.discountPercent) : v.discountPercent,
+          discountPercent: targetPct,
           minOrderAmount: draft ? Number(draft.minOrderAmount) : v.minOrderAmount,
-          maxDiscountAmount: draft
-            ? draft.maxDiscountAmount.trim() === ""
-              ? null
-              : Number(draft.maxDiscountAmount)
-            : v.maxDiscountAmount,
+          maxDiscountAmount: targetMax,
           description: draft ? draft.description : v.description,
           isActive: overrideActive !== undefined ? overrideActive : v.isActive,
         }),
@@ -3014,7 +3051,7 @@ export default function AdminPortalPage() {
                       step="5000"
                       value={newVoucherMaxDiscount}
                       onChange={(e) => setNewVoucherMaxDiscount(e.target.value)}
-                      placeholder="Trống = K.giới hạn"
+                      placeholder={`VD: ${getDefaultMaxDiscount(newVoucherCode, Number(newVoucherPercent) || 15).toLocaleString("vi-VN")}đ`}
                       className="w-full px-3 py-2 rounded-xl bg-[#FAF6F0] border border-[#E6DDD5] text-xs font-bold text-[#9E5A2B]"
                     />
                   </div>
@@ -3043,13 +3080,17 @@ export default function AdminPortalPage() {
               {/* Vouchers List */}
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {vouchers.map((v) => {
+                  const defaultCap = getDefaultMaxDiscount(v.code, v.discountPercent);
+                  const effectiveMax =
+                    v.maxDiscountAmount !== null &&
+                    v.maxDiscountAmount !== undefined &&
+                    Number(v.maxDiscountAmount) > 0
+                      ? Number(v.maxDiscountAmount)
+                      : defaultCap;
                   const draft = editingVoucherDrafts[v.id] ?? {
                     discountPercent: String(v.discountPercent),
                     minOrderAmount: String(v.minOrderAmount || 0),
-                    maxDiscountAmount:
-                      v.maxDiscountAmount !== null && v.maxDiscountAmount !== undefined
-                        ? String(v.maxDiscountAmount)
-                        : "",
+                    maxDiscountAmount: String(effectiveMax),
                     description: v.description || "",
                   };
                   const hasChanged = Boolean(editingVoucherDrafts[v.id]);
@@ -3068,15 +3109,9 @@ export default function AdminPortalPage() {
                             <span className="px-2.5 py-1 rounded-lg bg-[#FEF3C7] text-[#9E5A2B] font-mono text-sm font-extrabold">
                               {v.code}
                             </span>
-                            {v.maxDiscountAmount && Number(v.maxDiscountAmount) > 0 ? (
-                              <span className="px-2 py-0.5 rounded-md bg-[#FAF0E6] text-[#845326] text-[10px] font-bold border border-[#845326]/20">
-                                Trần: {Number(v.maxDiscountAmount).toLocaleString("vi-VN")}đ
-                              </span>
-                            ) : (
-                              <span className="px-2 py-0.5 rounded-md bg-stone-100 text-stone-600 text-[10px] font-bold">
-                                Không giới hạn trần
-                              </span>
-                            )}
+                            <span className="px-2 py-0.5 rounded-md bg-[#FAF0E6] text-[#845326] text-[10px] font-bold border border-[#845326]/20">
+                              Trần: {Number(effectiveMax).toLocaleString("vi-VN")}đ
+                            </span>
                           </div>
                           <p className="text-[11px] text-[#7A6A5E] mt-1">
                             Đã sử dụng: <strong>{v.usageCount ?? 0} lượt</strong>
@@ -3153,7 +3188,7 @@ export default function AdminPortalPage() {
                               type="number"
                               min="0"
                               step="5000"
-                              placeholder="K.giới hạn"
+                              placeholder={String(defaultCap)}
                               value={draft.maxDiscountAmount}
                               onChange={(e) =>
                                 setEditingVoucherDrafts((prev) => ({

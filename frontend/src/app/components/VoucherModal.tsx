@@ -74,7 +74,7 @@ export function calculateMaxDiscount(
   if (upper === "BREW10" || upper === "BREWLITE10") return 15000;
   if (upper === "BREW20" || upper === "WELCOME20") return 25000;
   if (upper === "BREW50") return 60000;
-  if (upper === "BREWCOZY") return 20000; // 15% Giờ vàng
+  if (upper === "BREWCOZY") return 25000; // 15% Giờ vàng
 
   // Tuyến tính theo các mốc chuẩn BREW10 (10% -> 15k), BREW20 (20% -> 25k), BREW50 (50% -> 60k)
   let max = 15000;

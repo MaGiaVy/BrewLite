@@ -557,6 +557,7 @@ async function main() {
       description: 'Ưu đãi Giờ vàng giảm 15% toàn menu',
       discountPercent: 15,
       minOrderAmount: 0,
+      maxDiscountAmount: 25000,
       isActive: true,
     },
     {
@@ -564,6 +565,15 @@ async function main() {
       description: 'Voucher Giảm 10% Toàn Đơn',
       discountPercent: 10,
       minOrderAmount: 0,
+      maxDiscountAmount: 15000,
+      isActive: true,
+    },
+    {
+      code: 'BREWLITE10',
+      description: 'Giảm 10% chào mừng khách hàng',
+      discountPercent: 10,
+      minOrderAmount: 0,
+      maxDiscountAmount: 15000,
       isActive: true,
     },
     {
@@ -571,6 +581,15 @@ async function main() {
       description: 'Voucher Giảm 20% Đơn Từ 60k',
       discountPercent: 20,
       minOrderAmount: 60000,
+      maxDiscountAmount: 25000,
+      isActive: true,
+    },
+    {
+      code: 'WELCOME20',
+      description: 'Giảm 20% khách hàng mới',
+      discountPercent: 20,
+      minOrderAmount: 0,
+      maxDiscountAmount: 25000,
       isActive: true,
     },
     {
@@ -578,6 +597,7 @@ async function main() {
       description: 'Siêu Voucher Giảm 50% VIP',
       discountPercent: 50,
       minOrderAmount: 120000,
+      maxDiscountAmount: 60000,
       isActive: true,
     },
   ];
@@ -588,6 +608,7 @@ async function main() {
         description: v.description,
         minOrderAmount: v.minOrderAmount,
         discountPercent: v.discountPercent,
+        maxDiscountAmount: v.maxDiscountAmount,
       },
       create: v,
     });

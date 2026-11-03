@@ -1,3 +1,23 @@
+
+export const DEFAULT_VOUCHER_MAX_DISCOUNTS: Record<string, number> = {
+  BREW10: 15000,
+  BREWLITE10: 15000,
+  BREWCOZY: 25000,
+  BREW20: 25000,
+  WELCOME20: 25000,
+  BREW50: 60000,
+};
+
+export function resolveDefaultMaxDiscount(code: string, discountPercent: number): number {
+  const upper = (code || '').toUpperCase().trim();
+  if (DEFAULT_VOUCHER_MAX_DISCOUNTS[upper]) {
+    return DEFAULT_VOUCHER_MAX_DISCOUNTS[upper];
+  }
+  if (discountPercent <= 10) return 15000;
+  if (discountPercent <= 20) return 25000;
+  if (discountPercent <= 50) return 60000;
+  return 100000;
+}
 import {
   ConflictException,
   Injectable,
@@ -659,10 +679,35 @@ export class InventoryService {
   // ─── VOUCHERS / DISCOUNT CODES CRUD ────────────────────────────────────────
   async getAllVouchers(onlyActive = false) {
     if (!(this.prisma as any).discountCode?.findMany) return [];
-    return (this.prisma as any).discountCode.findMany({
+    const list = await (this.prisma as any).discountCode.findMany({
       ...(onlyActive ? { where: { isActive: true } } : {}),
       orderBy: { id: 'asc' },
     });
+
+    // Tự động bổ sung mức giảm tối đa cố định chuẩn nếu chưa được cấu hình
+    const updated = await Promise.all(
+      list.map(async (v: any) => {
+        if (
+          v.maxDiscountAmount === null ||
+          v.maxDiscountAmount === undefined ||
+          Number(v.maxDiscountAmount) <= 0
+        ) {
+          const cap = resolveDefaultMaxDiscount(v.code, Number(v.discountPercent || 0));
+          try {
+            await (this.prisma as any).discountCode.update({
+              where: { id: v.id },
+              data: { maxDiscountAmount: cap },
+            });
+          } catch {
+            // bỏ qua nếu lỗi cập nhật bất đồng bộ
+          }
+          return { ...v, maxDiscountAmount: cap };
+        }
+        return v;
+      }),
+    );
+
+    return updated;
   }
 
   async createVoucher(dto: CreateVoucherDto) {
@@ -674,6 +719,17 @@ export class InventoryService {
       throw new ConflictException(`Mã giảm giá "${cleanCode}" đã tồn tại.`);
     }
 
+    const defaultCap = resolveDefaultMaxDiscount(
+      cleanCode,
+      Number(dto.discountPercent || 0),
+    );
+    const effectiveMaxDiscount =
+      dto.maxDiscountAmount !== undefined &&
+      dto.maxDiscountAmount !== null &&
+      Number(dto.maxDiscountAmount) > 0
+        ? Number(dto.maxDiscountAmount)
+        : defaultCap;
+
     return (this.prisma as any).discountCode.create({
       data: {
         code: cleanCode,
@@ -681,12 +737,7 @@ export class InventoryService {
           dto.description?.trim() || `Giảm ${dto.discountPercent}% đơn hàng`,
         discountPercent: dto.discountPercent,
         minOrderAmount: dto.minOrderAmount ?? 0,
-        maxDiscountAmount:
-          dto.maxDiscountAmount !== undefined &&
-          dto.maxDiscountAmount !== null &&
-          Number(dto.maxDiscountAmount) > 0
-            ? Number(dto.maxDiscountAmount)
-            : null,
+        maxDiscountAmount: effectiveMaxDiscount,
         isActive: dto.isActive ?? true,
       },
     });
@@ -705,6 +756,19 @@ export class InventoryService {
       cleanCode = dto.code.trim().toUpperCase().replace(/\s+/g, '');
     }
 
+    const defaultCap = resolveDefaultMaxDiscount(
+      cleanCode || existing.code,
+      Number(dto.discountPercent ?? existing.discountPercent ?? 0),
+    );
+
+    let maxDiscountAmountToSave: number | undefined;
+    if (dto.maxDiscountAmount !== undefined) {
+      maxDiscountAmountToSave =
+        dto.maxDiscountAmount !== null && Number(dto.maxDiscountAmount) > 0
+          ? Number(dto.maxDiscountAmount)
+          : defaultCap;
+    }
+
     return (this.prisma as any).discountCode.update({
       where: { id },
       data: {
@@ -718,14 +782,8 @@ export class InventoryService {
         ...(dto.minOrderAmount !== undefined
           ? { minOrderAmount: dto.minOrderAmount }
           : {}),
-        ...(dto.maxDiscountAmount !== undefined
-          ? {
-              maxDiscountAmount:
-                dto.maxDiscountAmount !== null &&
-                Number(dto.maxDiscountAmount) > 0
-                  ? Number(dto.maxDiscountAmount)
-                  : null,
-            }
+        ...(maxDiscountAmountToSave !== undefined
+          ? { maxDiscountAmount: maxDiscountAmountToSave }
           : {}),
         ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
       },

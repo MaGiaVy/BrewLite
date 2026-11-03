@@ -882,7 +882,7 @@ const VOUCHER_METADATA: Record<string, { title: string; minOrder: number; maxDis
   BREW10: { title: "Voucher Giảm 10% Toàn Đơn", minOrder: 0, maxDiscount: 15000 },
   BREW20: { title: "Voucher Giảm 20% Đơn Từ 60k", minOrder: 60000, maxDiscount: 25000 },
   BREW50: { title: "Siêu Voucher Giảm 50% VIP", minOrder: 120000, maxDiscount: 60000 },
-  BREWCOZY: { title: "Ưu đãi Giờ vàng giảm 15% toàn menu", minOrder: 0, maxDiscount: 20000 },
+  BREWCOZY: { title: "Ưu đãi Giờ vàng giảm 15% toàn menu", minOrder: 0, maxDiscount: 25000 },
   BREWLITE10: { title: "Voucher Giảm 10% Chào Mừng", minOrder: 0, maxDiscount: 15000 },
   WELCOME20: { title: "Voucher Giảm 20% Khách Hàng Mới", minOrder: 50000, maxDiscount: 25000 },
 };
