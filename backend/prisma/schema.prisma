@@ -66,6 +66,8 @@ model Ingredient {
   stock          Float           @default(0)
   minThreshold   Float           @default(100)
   costPerUnit    Float           @default(0) // Đơn giá nhập (VNĐ / 1 đơn vị g, ml, chiếc...)
+  type              String          @default("INGREDIENT") // INGREDIENT | PACKAGING
+  isRequiredForSale Boolean         @default(true)         // True = Khóa món khi hết; False = Hết vẫn cho bán món, chỉ cảnh báo kho
   version        Int             @default(0) // Optimistic Locking chống bán vượt tồn kho
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt

@@ -22,15 +22,6 @@ interface Props {
   apiFetch: (endpoint: string, options?: RequestInit) => Promise<Response>;
 }
 
-const POSITION_SUGGESTIONS = [
-  "Trưởng Ca / Barista",
-  "Thu Ngân Chính",
-  "Barista Pha Chế",
-  "Phục Vụ & Kiểm Kho",
-  "Quản Lý Cửa Hàng",
-  "Nhân Viên Part-time",
-];
-
 export default function StaffManagementSection({
   staffList,
   currentUserId,
@@ -55,7 +46,6 @@ export default function StaffManagementSection({
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
-  const [position, setPosition] = useState("Barista Pha Chế");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<"STAFF" | "ADMIN">("STAFF");
   const [isActive, setIsActive] = useState(true);
@@ -72,8 +62,7 @@ export default function StaffManagementSection({
       !q ||
       s.fullName?.toLowerCase().includes(q) ||
       s.email?.toLowerCase().includes(q) ||
-      s.phone?.includes(q) ||
-      s.position?.toLowerCase().includes(q);
+      s.phone?.includes(q);
 
     const matchRole = roleFilter === "ALL" || s.role === roleFilter;
     const matchStatus =
@@ -90,7 +79,6 @@ export default function StaffManagementSection({
     setFullName("");
     setEmail("");
     setPhone("");
-    setPosition("Barista Pha Chế");
     setPassword("123456");
     setRole("STAFF");
     setIsActive(true);
@@ -103,7 +91,6 @@ export default function StaffManagementSection({
     setFullName(staff.fullName || "");
     setEmail(staff.email || "");
     setPhone(staff.phone || "");
-    setPosition(staff.position || "Barista Pha Chế");
     setPassword(""); // Để trống nếu không đổi pass
     setRole(staff.role === "ADMIN" ? "ADMIN" : "STAFF");
     setIsActive(staff.isActive);
@@ -134,7 +121,6 @@ export default function StaffManagementSection({
           fullName: fullName.trim(),
           email: email.trim(),
           phone: phone.trim() || null,
-          position: position.trim(),
           role,
           isActive,
         };
@@ -159,7 +145,6 @@ export default function StaffManagementSection({
           fullName: fullName.trim(),
           email: email.trim(),
           phone: phone.trim() || null,
-          position: position.trim(),
           password: password.trim(),
           role,
         };
@@ -270,7 +255,7 @@ export default function StaffManagementSection({
               </h2>
             </div>
             <p className="text-xs text-[#7A6A5E] mt-0.5">
-              Thêm, chỉnh sửa thông tin, phân quyền chức vụ và quản lý trạng thái tài khoản nhân sự
+              Thêm, chỉnh sửa thông tin, phân quyền và quản lý trạng thái tài khoản nhân sự
             </p>
           </div>
 
@@ -293,7 +278,7 @@ export default function StaffManagementSection({
             </span>
             <input
               type="text"
-              placeholder="Tìm theo tên, email, SĐT, vị trí..."
+              placeholder="Tìm theo tên, email, SĐT..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full pl-9 pr-3 py-2 rounded-xl bg-[#FAF6F0] border border-[#E6DDD5] text-xs text-[#2C1E18] focus:outline-none focus:border-[#9E5A2B]"
@@ -341,7 +326,6 @@ export default function StaffManagementSection({
             <thead>
               <tr className="bg-[#FAF6F0] border-b border-[#E6DDD5] text-[#7A6A5E] font-bold uppercase tracking-wider text-[11px]">
                 <th className="py-3 px-4">Nhân Viên</th>
-                <th className="py-3 px-4">Vị Trí &amp; Ca Làm</th>
                 <th className="py-3 px-4">Liên Hệ</th>
                 <th className="py-3 px-4">Vai Trò</th>
                 <th className="py-3 px-4">Trạng Thái</th>
@@ -351,7 +335,7 @@ export default function StaffManagementSection({
             <tbody className="divide-y divide-[#F0EAE3]">
               {filteredStaff.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="py-12 text-center text-[#7A6A5E]">
+                  <td colSpan={5} className="py-12 text-center text-[#7A6A5E]">
                     <div className="flex flex-col items-center justify-center gap-2">
                       <span className="material-symbols-outlined text-4xl text-[#C4B7AC]">
                         group_off
@@ -404,17 +388,7 @@ export default function StaffManagementSection({
                         </div>
                       </td>
 
-                      {/* Cột 2: Vị trí & Chức vụ */}
-                      <td className="py-3.5 px-4">
-                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#F5EDE4] text-[#845326] font-semibold text-xs border border-[#E3D6C8]">
-                          <span className="material-symbols-outlined text-[14px]">
-                            badge
-                          </span>
-                          {staff.position || "Nhân viên"}
-                        </span>
-                      </td>
-
-                      {/* Cột 3: Email & SĐT */}
+                      {/* Cột 2: Email & SĐT */}
                       <td className="py-3.5 px-4">
                         <p className="text-[#2C1E18] font-medium">{staff.email}</p>
                         <p className="text-[11px] text-[#7A6A5E]">
@@ -422,7 +396,7 @@ export default function StaffManagementSection({
                         </p>
                       </td>
 
-                      {/* Cột 4: Vai trò */}
+                      {/* Cột 3: Vai trò */}
                       <td className="py-3.5 px-4">
                         <span
                           className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold ${
@@ -438,7 +412,7 @@ export default function StaffManagementSection({
                         </span>
                       </td>
 
-                      {/* Cột 5: Trạng thái & Toggle */}
+                      {/* Cột 4: Trạng thái & Toggle */}
                       <td className="py-3.5 px-4">
                         <button
                           type="button"
@@ -580,32 +554,6 @@ export default function StaffManagementSection({
                 </div>
               </div>
 
-              {/* Vị trí ca làm / Chức vụ */}
-              <div>
-                <label className="block text-xs font-bold text-[#2C1E18] mb-1">
-                  Vị trí công việc &amp; Chức vụ <span className="text-red-600">*</span>
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Ví dụ: Barista Pha Chế, Thu Ngân Chính..."
-                  value={position}
-                  onChange={(e) => setPosition(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-[#E6DDD5] text-xs text-[#2C1E18] focus:outline-none focus:border-[#9E5A2B]"
-                />
-                <div className="flex flex-wrap gap-1.5 mt-2">
-                  {POSITION_SUGGESTIONS.map((pos) => (
-                    <button
-                      key={pos}
-                      type="button"
-                      onClick={() => setPosition(pos)}
-                      className="px-2 py-0.5 rounded-md bg-[#FAF6F0] hover:bg-[#F0EAE3] text-[11px] text-[#7A6A5E] hover:text-[#2C1E18] border border-[#E6DDD5] cursor-pointer"
-                    >
-                      {pos}
-                    </button>
-                  ))}
-                </div>
-              </div>
 
               {/* Mật khẩu */}
               <div>

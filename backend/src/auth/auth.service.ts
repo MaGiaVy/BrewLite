@@ -11,6 +11,7 @@ import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { RegisterDto } from './dto/register.dto.js';
 import { LoginDto } from './dto/login.dto.js';
+import { UpdateProfileDto } from './dto/update-profile.dto.js';
 import type { JwtPayload } from './jwt.strategy.js';
 
 const SALT_ROUNDS = 10;
@@ -138,6 +139,57 @@ export class AuthService {
     }
 
     return safeUser(user);
+  }
+
+  // ─── Update Profile ──────────────────────────────────────────────────────────
+
+  async updateProfile(userId: number, dto: UpdateProfileDto) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      throw new NotFoundException('User không tồn tại');
+    }
+
+    let newPasswordHash: string | undefined;
+
+    if (dto.newPassword) {
+      if (!dto.currentPassword) {
+        throw new BadRequestException(
+          'Vui lòng nhập mật khẩu hiện tại để đổi mật khẩu mới',
+        );
+      }
+
+      const isMatch = await bcrypt.compare(
+        dto.currentPassword,
+        user.passwordHash,
+      );
+      if (!isMatch) {
+        throw new BadRequestException('Mật khẩu hiện tại không chính xác');
+      }
+
+      newPasswordHash = await bcrypt.hash(dto.newPassword, 10);
+    }
+
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        fullName: dto.fullName?.trim(),
+        phone: dto.phone?.trim(),
+        passwordHash: newPasswordHash,
+      },
+      select: {
+        id: true,
+        email: true,
+        fullName: true,
+        phone: true,
+        role: true,
+        isActive: true,
+        loyaltyPoints: true,
+        createdAt: true,
+      },
+    });
   }
 
   // ─── Get User Vouchers ───────────────────────────────────────────────────────

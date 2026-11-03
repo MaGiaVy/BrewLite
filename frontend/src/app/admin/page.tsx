@@ -2,6 +2,7 @@
 
 import RevenueChartSection from "./components/RevenueChartSection";
 import StaffManagementSection, { StaffUser } from "./components/StaffManagementSection";
+import CustomerManagementSection, { CustomerUser } from "./components/CustomerManagementSection";
 
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import Link from "next/link";
@@ -20,6 +21,8 @@ interface Ingredient {
   costPerBulkUnit?: number;
   bulkUnitLabel?: string;
   totalInventoryValue?: number;
+  type?: "INGREDIENT" | "PACKAGING";
+  isRequiredForSale?: boolean;
   version: number;
   status: "OK" | "LOW_STOCK" | "OUT_OF_STOCK";
   percentage: number;
@@ -157,7 +160,7 @@ interface TopSellingProduct {
   orderCount: number;
 }
 
-type AdminTab = "overview" | "products" | "inventory" | "recipes" | "vouchers" | "revenue" | "staff";
+type AdminTab = "overview" | "products" | "inventory" | "recipes" | "vouchers" | "revenue" | "staff" | "customers";
 
 const CATEGORY_OPTIONS = [
   { id: "vietnamese", label: "Cà Phê Phin Việt Nam" },
@@ -202,6 +205,7 @@ export default function AdminPortalPage() {
   );
   const [allOrders, setAllOrders] = useState<OrderSummary[]>([]);
   const [staffList, setStaffList] = useState<StaffUser[]>([]);
+  const [customerList, setCustomerList] = useState<CustomerUser[]>([]);
   const [topSellingProducts, setTopSellingProducts] = useState<
     TopSellingProduct[]
   >([]);
@@ -265,6 +269,7 @@ export default function AdminPortalPage() {
 
   // ─── 2. INVENTORY MANAGEMENT STATES ────────────────────────────────────────
   const [searchQuery, setSearchQuery] = useState<string>("");
+  const [inventoryTypeFilter, setInventoryTypeFilter] = useState<"ALL" | "INGREDIENT" | "PACKAGING">("ALL");
   const [stockFilter, setStockFilter] = useState<
     "all" | "low" | "pastry" | "beverage"
   >("all");
@@ -292,6 +297,8 @@ export default function AdminPortalPage() {
   const [ingCostPerUnit, setIngCostPerUnit] = useState<string>("250");
   const [ingCostBulk, setIngCostBulk] = useState<string>("250000");
   const [inlineIngCostDrafts, setInlineIngCostDrafts] = useState<Record<number, string>>({});
+  const [ingType, setIngType] = useState<"INGREDIENT" | "PACKAGING">("INGREDIENT");
+  const [ingIsRequiredForSale, setIngIsRequiredForSale] = useState<boolean>(true);
   const [isSavingIng, setIsSavingIng] = useState<boolean>(false);
 
   // ─── 3. BOM RECIPES EDITOR STATES ──────────────────────────────────────────
@@ -376,7 +383,7 @@ export default function AdminPortalPage() {
     if (!_hasHydrated || !isAuthenticated || user?.role !== "ADMIN") return;
     setIsLoading(true);
     try {
-      const [ingRes, recRes, prodRes, dashRes, logsRes, vouchersRes, staffRes] = await Promise.all([
+      const [ingRes, recRes, prodRes, dashRes, logsRes, vouchersRes, staffRes, custRes] = await Promise.all([
         apiFetch("/inventory/ingredients", { cache: "no-store" }),
         apiFetch("/inventory/recipes", { cache: "no-store" }),
         apiFetch("/products?includeInactive=true", { cache: "no-store" }),
@@ -384,6 +391,7 @@ export default function AdminPortalPage() {
         apiFetch("/inventory/logs?limit=40", { cache: "no-store" }),
         apiFetch("/inventory/vouchers", { cache: "no-store" }),
         apiFetch("/staff", { cache: "no-store" }),
+        apiFetch("/admin/customers", { cache: "no-store" }),
       ]);
 
       if (ingRes.ok) {
@@ -459,6 +467,10 @@ export default function AdminPortalPage() {
       if (staffRes?.ok) {
         const staffData = await staffRes.json();
         setStaffList(Array.isArray(staffData) ? staffData : []);
+      }
+      if (custRes?.ok) {
+        const custData = await custRes.json();
+        setCustomerList(Array.isArray(custData) ? custData : []);
       }
     } catch {
       showToast("Không thể tải dữ liệu quản trị từ máy chủ");
@@ -840,6 +852,9 @@ export default function AdminPortalPage() {
     setIngMinThreshold("300");
     setIngCostPerUnit("45");
     setIngCostBulk("45000");
+    setIngType("INGREDIENT");
+    setIngIsRequiredForSale(true);
+
     setIsIngFormOpen(true);
   };
 
@@ -852,9 +867,12 @@ export default function AdminPortalPage() {
     setIngMinThreshold(String(ing.minThreshold));
     const cpu = Number(ing.costPerUnit ?? 0);
     setIngCostPerUnit(String(cpu));
+    setIngType(ing.type || "INGREDIENT");
+    setIngIsRequiredForSale(ing.isRequiredForSale ?? true);
     setIngCostBulk(
       String(ing.unit === "g" || ing.unit === "ml" ? Math.round(cpu * 1000) : cpu)
     );
+
     setIsIngFormOpen(true);
   };
 
@@ -912,6 +930,8 @@ export default function AdminPortalPage() {
         stock: stockNum,
         minThreshold: minNum,
         costPerUnit: Math.max(0, Number(ingCostPerUnit) || 0),
+        type: ingType,
+        isRequiredForSale: ingIsRequiredForSale,
       };
       const res = await apiFetch(
         editingIng
@@ -1310,6 +1330,15 @@ export default function AdminPortalPage() {
         ing.code.toLowerCase().includes(searchQuery.toLowerCase());
 
       if (!matchSearch) return false;
+
+      // Lọc theo phân loại nguyên vật liệu (Task 7)
+      const ingType = ing.type || "INGREDIENT";
+      if (inventoryTypeFilter === "INGREDIENT" && ingType !== "INGREDIENT") {
+        return false;
+      }
+      if (inventoryTypeFilter === "PACKAGING" && ingType !== "PACKAGING") {
+        return false;
+      }
       if (stockFilter === "low") {
         return ing.status === "LOW_STOCK" || ing.status === "OUT_OF_STOCK";
       }
@@ -1323,7 +1352,7 @@ export default function AdminPortalPage() {
       }
       return true;
     });
-  }, [ingredients, searchQuery, stockFilter]);
+  }, [ingredients, searchQuery, stockFilter, inventoryTypeFilter]);
 
   const filteredBomProducts = useMemo(() => {
     if (focusedProductIdForBom === "all") return products;
@@ -1448,6 +1477,12 @@ export default function AdminPortalPage() {
                 label: "Quản Lý Nhân Viên",
                 badge: staffList.length > 0 ? staffList.length : undefined,
               },
+              {
+                id: "customers" as AdminTab,
+                icon: "group",
+                label: "Quản Lý Khách Hàng",
+                badge: customerList.length > 0 ? customerList.length : undefined,
+              },
             ].map((item) => {
               const isActive = activeTab === item.id;
               return (
@@ -1537,6 +1572,8 @@ export default function AdminPortalPage() {
                 "Quản Trị Đơn Hàng & Báo Cáo Doanh Thu"}
               {activeTab === "staff" &&
                 "Quản Lý Nhân Viên & Ca Làm Việc"}
+              {activeTab === "customers" &&
+                "Quản Lý Khách Hàng & Thành Viên Thân Thiết"}
             </h1>
           </div>
 
@@ -2245,8 +2282,32 @@ export default function AdminPortalPage() {
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
+                  {/* Bộ lọc danh mục vật tư (Task 7) */}
+                  <div className="flex items-center gap-1 p-1 bg-[#FAF6F0] rounded-xl border border-[#E6DDD5]">
+                    {[
+                      { id: "ALL", label: "Tất cả" },
+                      { id: "INGREDIENT", label: "☕ Nguyên liệu pha chế" },
+                      { id: "PACKAGING", label: "🥤 Bao bì & Vật tư" },
+                    ].map((cat) => (
+                      <button
+                        key={cat.id}
+                        type="button"
+                        onClick={() => setInventoryTypeFilter(cat.id as any)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                          inventoryTypeFilter === cat.id
+                            ? "bg-[#2C1810] text-white shadow-xs"
+                            : "text-[#7A6A5E] hover:text-[#2C1E18] hover:bg-[#F3ECE4]"
+                        }`}
+                      >
+                        {cat.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="w-[1px] h-6 bg-[#E6DDD5] hidden lg:block" />
+
                   {[
-                    { id: "all", label: "Tất cả (100%)" },
+                    { id: "all", label: "Tất cả mức tồn" },
                     {
                       id: "low",
                       label: `Cần nhập gấp (${lowStockCount})`,
@@ -2303,10 +2364,40 @@ export default function AdminPortalPage() {
                         <div>
                           <div className="flex items-start justify-between gap-2">
                             <div>
-                              <span className="text-[10px] font-mono font-bold uppercase tracking-wider px-2 py-0.5 rounded-md bg-[#F3ECE4] text-[#7A6A5E]">
-                                {ing.code}
-                              </span>
-                              <h3 className="font-headline font-bold text-base text-[#2C1E18] mt-1.5">
+                              <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
+                                <span className="text-[10px] font-mono font-bold uppercase tracking-wider px-2 py-0.5 rounded-md bg-[#F3ECE4] text-[#7A6A5E]">
+                                  {ing.code}
+                                </span>
+                                {/* Badge Loại Vật Tư */}
+                                <span
+                                  className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${
+                                    ing.type === "PACKAGING"
+                                      ? "bg-purple-100 text-purple-900 border border-purple-200"
+                                      : "bg-amber-100 text-amber-900 border border-amber-200"
+                                  }`}
+                                >
+                                  {ing.type === "PACKAGING"
+                                    ? "🥤 Bao bì & Vật tư"
+                                    : "☕ Nguyên liệu"}
+                                </span>
+                                {/* Badge Nhận Diện Cốt Lõi vs Phụ Trợ (Task 7) */}
+                                {ing.isRequiredForSale !== false ? (
+                                  <span
+                                    className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 border border-emerald-300"
+                                    title="Nguyên liệu cốt lõi: Hết tồn kho sẽ tự động khóa món trên menu"
+                                  >
+                                    Cốt lõi (Khóa món khi hết)
+                                  </span>
+                                ) : (
+                                  <span
+                                    className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-50 text-amber-800 border border-amber-300"
+                                    title="Vật tư phụ trợ: Hết tồn kho vẫn cho phép bán món"
+                                  >
+                                    Phụ trợ (Hết vẫn bán)
+                                  </span>
+                                )}
+                              </div>
+                              <h3 className="font-headline font-bold text-base text-[#2C1E18]">
                                 {ing.name}
                               </h3>
                             </div>
@@ -3595,6 +3686,19 @@ export default function AdminPortalPage() {
               apiFetch={apiFetch}
             />
           )}
+
+          {/* ===================================================================
+              TAB 8: QUẢN LÝ KHÁCH HÀNG & THÀNH VIÊN (CUSTOMER CRUD)
+             =================================================================== */}
+          {activeTab === "customers" && (
+            <CustomerManagementSection
+              customers={customerList}
+              staffList={staffList}
+              onRefresh={fetchAdminData}
+              showToast={showToast}
+              apiFetch={apiFetch}
+            />
+          )}
         </main>
       </div>
 
@@ -4049,19 +4153,26 @@ export default function AdminPortalPage() {
             </div>
 
             <form onSubmit={handleSaveIngredient} className="mt-4 space-y-3.5">
+              {/* Phân loại vật tư & Đơn vị tính (Task 7) */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-[#2C1E18] mb-1">
-                    Mã Code *
+                    Phân loại vật tư *
                   </label>
-                  <input
-                    type="text"
-                    required
-                    value={ingCode}
-                    onChange={(e) => setIngCode(e.target.value)}
-                    placeholder="ING_OAT_MILK"
-                    className="w-full px-3 py-2 rounded-xl bg-[#FAF6F0] border border-[#E6DDD5] text-xs font-mono font-bold"
-                  />
+                  <select
+                    value={ingType}
+                    onChange={(e) => {
+                      const nextType = e.target.value as "INGREDIENT" | "PACKAGING";
+                      setIngType(nextType);
+                      if (nextType === "PACKAGING" && (ingUnit === "g" || ingUnit === "ml")) {
+                        setIngUnit("chiếc");
+                      }
+                    }}
+                    className="w-full px-3 py-2 rounded-xl bg-[#FAF6F0] border border-[#E6DDD5] text-xs font-bold text-[#2C1E18] focus:outline-none focus:border-[#9E5A2B]"
+                  >
+                    <option value="INGREDIENT">☕ Nguyên liệu pha chế</option>
+                    <option value="PACKAGING">🥤 Bao bì &amp; Vật tư</option>
+                  </select>
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-[#2C1E18] mb-1">
@@ -4070,29 +4181,79 @@ export default function AdminPortalPage() {
                   <select
                     value={ingUnit}
                     onChange={(e) => setIngUnit(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl bg-[#FAF6F0] border border-[#E6DDD5] text-xs font-bold"
+                    className="w-full px-3 py-2 rounded-xl bg-[#FAF6F0] border border-[#E6DDD5] text-xs font-bold text-[#2C1E18] focus:outline-none focus:border-[#9E5A2B]"
                   >
                     <option value="g">g (Gram)</option>
                     <option value="ml">ml (Mililit)</option>
                     <option value="chiếc">chiếc</option>
+                    <option value="cái">cái</option>
+                    <option value="ly">ly</option>
+                    <option value="túi">túi</option>
+                    <option value="ống">ống</option>
+                    <option value="hộp">hộp</option>
                     <option value="lát">lát</option>
                     <option value="phần">phần</option>
                   </select>
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-[#2C1E18] mb-1">
-                  Tên nguyên vật liệu *
+              {/* Mã Code & Tên */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="sm:col-span-1">
+                  <label className="block text-xs font-bold text-[#2C1E18] mb-1">
+                    Mã Code *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={ingCode}
+                    onChange={(e) => setIngCode(e.target.value)}
+                    placeholder={ingType === "PACKAGING" ? "PKG_CUP_M" : "ING_OAT_MILK"}
+                    className="w-full px-3 py-2 rounded-xl bg-[#FAF6F0] border border-[#E6DDD5] text-xs font-mono font-bold uppercase"
+                  />
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-bold text-[#2C1E18] mb-1">
+                    Tên nguyên vật liệu *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={ingName}
+                    onChange={(e) => setIngName(e.target.value)}
+                    placeholder={ingType === "PACKAGING" ? "VD: Ly giấy Size M (500ml)" : "VD: Sữa Yến Mạch Oatside Barista"}
+                    className="w-full px-3.5 py-2 rounded-xl bg-[#FAF6F0] border border-[#E6DDD5] text-xs font-semibold"
+                  />
+                </div>
+              </div>
+
+              {/* Switch / Checkbox isRequiredForSale (Task 7) */}
+              <div className="p-3 rounded-2xl bg-[#FAF6F0] border border-[#E6DDD5] flex items-center justify-between gap-3">
+                <div className="flex-1">
+                  <div className="flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-[18px] text-[#9E5A2B]">
+                      {ingIsRequiredForSale ? "lock" : "lock_open_right"}
+                    </span>
+                    <label htmlFor="reqSaleModalSwitch" className="text-xs font-bold text-[#2C1E18] cursor-pointer">
+                      Bắt buộc có để bán món ({ingIsRequiredForSale ? "Cốt lõi" : "Phụ trợ"})
+                    </label>
+                  </div>
+                  <p className="text-[11px] text-[#7A6A5E] mt-0.5">
+                    {ingIsRequiredForSale
+                      ? "Khóa món khi hết: Tồn kho = 0 sẽ tự động ẩn / báo Tạm hết hàng cho các món dùng vật tư này."
+                      : "Phụ trợ (Hết vẫn bán): Khi hết hàng vẫn cho phép bán món bình thường (túi mang đi, muỗng, v.v.)."}
+                  </p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                  <input
+                    id="reqSaleModalSwitch"
+                    type="checkbox"
+                    checked={ingIsRequiredForSale}
+                    onChange={(e) => setIngIsRequiredForSale(e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-gray-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#166534]"></div>
                 </label>
-                <input
-                  type="text"
-                  required
-                  value={ingName}
-                  onChange={(e) => setIngName(e.target.value)}
-                  placeholder="VD: Sữa Yến Mạch Oatside Barista"
-                  className="w-full px-3.5 py-2 rounded-xl bg-[#FAF6F0] border border-[#E6DDD5] text-sm font-semibold"
-                />
               </div>
 
               <div className="grid grid-cols-2 gap-3">

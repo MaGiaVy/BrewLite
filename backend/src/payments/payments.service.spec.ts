@@ -114,7 +114,7 @@ describe('Task 10 — Payments, State Machine, Idempotency, Optimistic Locking &
       mockPaymentService = {
         processPayment: vi.fn(),
       };
-      service = new PaymentsService(mockPrisma as any, mockPaymentService as any);
+      service = new PaymentsService(mockPrisma as any, mockPaymentService as any, {} as any);
     });
 
     it('ném NotFoundException nếu đơn hàng không tồn tại', async () => {

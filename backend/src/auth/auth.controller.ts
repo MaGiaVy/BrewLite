@@ -4,6 +4,7 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Patch,
   Post,
   Request,
   UseGuards,
@@ -11,6 +12,7 @@ import {
 import { AuthService } from './auth.service.js';
 import { RegisterDto } from './dto/register.dto.js';
 import { LoginDto } from './dto/login.dto.js';
+import { UpdateProfileDto } from './dto/update-profile.dto.js';
 import { JwtAuthGuard } from './jwt-auth.guard.js';
 
 interface AuthRequest extends Request {
@@ -42,6 +44,16 @@ export class AuthController {
   @Get('me')
   getProfile(@Request() req: AuthRequest) {
     return this.authService.getProfile(req.user.userId);
+  }
+
+  /**
+   * PATCH /auth/profile — Cập nhật thông tin cá nhân và đổi mật khẩu
+   * Yêu cầu JWT Bearer Token
+   */
+  @UseGuards(JwtAuthGuard)
+  @Patch('profile')
+  updateProfile(@Request() req: AuthRequest, @Body() dto: UpdateProfileDto) {
+    return this.authService.updateProfile(req.user.userId, dto);
   }
 
   /**

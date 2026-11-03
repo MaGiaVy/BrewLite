@@ -47,7 +47,7 @@ describe('ProductsService — Admin Menu CRUD & Visibility Management', () => {
         basePrice: 42000,
         isActive: true,
         isSoldOutManual: false,
-        recipes: [],
+        recipes: [{ id: 10, size: 'S', amount: 20, ingredient: { stock: 500, isRequiredForSale: true } }],
       },
     ]);
 
@@ -104,7 +104,7 @@ describe('ProductsService — Admin Menu CRUD & Visibility Management', () => {
       tag: 'Mới',
       isActive: true,
       isSoldOutManual: false,
-      recipes: [],
+      recipes: [{ id: 11, size: 'S', amount: 20, ingredient: { stock: 500, isRequiredForSale: true } }],
     });
 
     const created = await service.create({

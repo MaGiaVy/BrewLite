@@ -334,30 +334,51 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
           );
         }
 
-        if (currentIng.stock < reqIng.requiredAmount) {
+        const isRequired = currentIng.isRequiredForSale ?? true;
+
+        if (isRequired && currentIng.stock < reqIng.requiredAmount) {
           throw new BadRequestException(
             `Nguyên vật liệu "${currentIng.name}" không đủ tồn kho (Cần ${reqIng.requiredAmount}${currentIng.unit}, hiện còn ${currentIng.stock}${currentIng.unit}).`,
           );
         }
 
-        // Optimistic Locking: chỉ trừ kho khi version khớp và stock >= requiredAmount
-        const updateRes = await tx.ingredient.updateMany({
-          where: {
-            id: currentIng.id,
-            version: currentIng.version,
-            stock: { gte: reqIng.requiredAmount },
-          },
-          data: {
-            stock: { decrement: reqIng.requiredAmount },
-            version: { increment: 1 },
-          },
-        });
+        if (isRequired) {
+          // Optimistic Locking: chỉ trừ kho khi version khớp và stock >= requiredAmount
+          const updateRes = await tx.ingredient.updateMany({
+            where: {
+              id: currentIng.id,
+              version: currentIng.version,
+              stock: { gte: reqIng.requiredAmount },
+            },
+            data: {
+              stock: { decrement: reqIng.requiredAmount },
+              version: { increment: 1 },
+            },
+          });
 
-        if (updateRes.count === 0) {
-          throw new ConflictException(
-            `Xung đột đồng thời (Optimistic Lock) khi trừ kho nguyên vật liệu "${currentIng.name}". Vui lòng thử lại.`,
-          );
+          if (updateRes.count === 0) {
+            throw new ConflictException(
+              `Xung đột đồng thời (Optimistic Lock) khi trừ kho nguyên vật liệu "${currentIng.name}". Vui lòng thử lại.`,
+            );
+          }
+        } else {
+          // Phụ trợ (không bắt buộc): trừ tồn kho nếu còn (tối đa về 0), không chặn bán món nếu hết kho
+          const deductAmount = Math.min(currentIng.stock, reqIng.requiredAmount);
+          if (deductAmount > 0) {
+            await tx.ingredient.updateMany({
+              where: {
+                id: currentIng.id,
+                version: currentIng.version,
+                stock: { gte: deductAmount },
+              },
+              data: {
+                stock: { decrement: deductAmount },
+                version: { increment: 1 },
+              },
+            });
+          }
         }
+
       }
 
       const newOrder = await tx.order.create({

@@ -8,6 +8,7 @@ import { Tag } from "lucide-react";
 import { useAuthStore } from "../store/authStore";
 import { useCartStore } from "../store/cartStore";
 import VoucherModal, { getMinOrderAmount, calculateMaxDiscount, getVoucherTitle } from "./VoucherModal";
+import EditProfileModal from "./EditProfileModal";
 import type { VoucherItem } from "../cart/page";
 
 interface LoyaltyDrawerProps {
@@ -23,6 +24,7 @@ export default function LoyaltyDrawer({ isOpen, onClose }: LoyaltyDrawerProps) {
   const [redeemedToast, setRedeemedToast] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
   const [isVoucherModalOpen, setIsVoucherModalOpen] = useState(false);
+  const [isEditProfileOpen, setIsEditProfileOpen] = useState(false);
   const [isRefreshingPoints, setIsRefreshingPoints] = useState(false);
   const [vouchers, setVouchers] = useState<VoucherItem[]>([
     { code: "BREWCOZY", description: "Ưu đãi Giờ vàng giảm 15% toàn menu", discountPercent: 15, minOrderAmount: 0, maxDiscountAmount: 20000, quantity: 1 },
@@ -182,10 +184,20 @@ export default function LoyaltyDrawer({ isOpen, onClose }: LoyaltyDrawerProps) {
                 {initials}
               </div>
               <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 flex-wrap">
                   <h3 className="font-bold text-[15px] text-[#1D1B19] truncate leading-tight">
                     {user?.fullName || "Khách hàng BrewLite"}
                   </h3>
+                  <button
+                    type="button"
+                    onClick={() => setIsEditProfileOpen(true)}
+                    className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#845326] hover:text-[#2C1810] hover:bg-[#FAF0E6] px-2 py-0.5 rounded-lg border border-[#E6DDD5] transition-colors cursor-pointer shrink-0"
+                    title="Chỉnh sửa thông tin hồ sơ & Đổi mật khẩu"
+                    aria-label="Chỉnh sửa hồ sơ"
+                  >
+                    <span className="material-symbols-outlined text-[13px]">person_edit</span>
+                    <span>Chỉnh sửa hồ sơ</span>
+                  </button>
                   <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#FEF3C7] text-[#92400E] border border-[#FDE68A] shrink-0">
                     <span className="material-symbols-outlined text-[12px]">workspace_premium</span>
                     Thành viên {currentTier}
@@ -424,6 +436,18 @@ export default function LoyaltyDrawer({ isOpen, onClose }: LoyaltyDrawerProps) {
           setIsVoucherModalOpen(false);
           onClose();
           router.push("/cart");
+        }}
+      />
+
+      {/* ── Edit Profile Modal from Loyalty Drawer ── */}
+      <EditProfileModal
+        isOpen={isEditProfileOpen}
+        onClose={() => setIsEditProfileOpen(false)}
+        onSuccess={(msg) => {
+          setRedeemedToast(msg);
+          setTimeout(() => setRedeemedToast(null), 3000);
+          refreshProfile();
+          setIsEditProfileOpen(false);
         }}
       />
     </div>,

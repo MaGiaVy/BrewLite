@@ -1,3 +1,4 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -114,6 +115,7 @@ describe('AuthService - Loyalty Points Redemption & Voucher Accumulation', () =>
         quantity: 1,
         discountPercent: 10,
         minOrderAmount: 0,
+          maxDiscountAmount: null,
       });
       prisma.userVoucher.findMany.mockResolvedValue([
         {
@@ -123,6 +125,7 @@ describe('AuthService - Loyalty Points Redemption & Voucher Accumulation', () =>
           quantity: 1,
           discountPercent: 10,
           minOrderAmount: 0,
+          maxDiscountAmount: null,
         },
       ]);
 
@@ -143,6 +146,7 @@ describe('AuthService - Loyalty Points Redemption & Voucher Accumulation', () =>
           quantity: 1,
           discountPercent: 10,
           minOrderAmount: 0,
+          maxDiscountAmount: null,
         },
       });
       expect(res.success).toBe(true);

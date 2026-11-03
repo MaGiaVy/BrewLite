@@ -46,6 +46,14 @@ export class UpdateIngredientStockDto {
 
   @IsOptional()
   @IsString()
+  type?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isRequiredForSale?: boolean;
+
+  @IsOptional()
+  @IsString()
   note?: string;
 }
 
@@ -74,6 +82,14 @@ export class CreateIngredientDto {
   @IsNumber()
   @Min(0)
   costPerUnit?: number;
+
+  @IsOptional()
+  @IsString()
+  type?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isRequiredForSale?: boolean;
 }
 
 export class UpdateIngredientDto {
@@ -106,6 +122,14 @@ export class UpdateIngredientDto {
   @IsNumber()
   @Min(0)
   costPerUnit?: number;
+
+  @IsOptional()
+  @IsString()
+  type?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isRequiredForSale?: boolean;
 }
 
 export class UpsertRecipeDto {

@@ -47,6 +47,10 @@ export class ProductsService {
 
     for (const r of checkRecipes) {
       if (r.ingredient && r.amount > 0) {
+        const isRequired = r.ingredient.isRequiredForSale ?? true;
+        if (!isRequired) {
+          continue;
+        }
         const possible = Math.floor(r.ingredient.stock / r.amount);
         if (possible < minServings) {
           minServings = possible;

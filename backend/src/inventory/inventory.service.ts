@@ -58,11 +58,75 @@ export class InventoryService {
 
     return {
       ...ing,
+      type: ing.type || 'INGREDIENT',
+      isRequiredForSale: ing.isRequiredForSale ?? true,
       costPerUnit,
       totalInventoryValue,
       status,
       percentage,
       recipesCount: Array.isArray(ing.recipes) ? ing.recipes.length : undefined,
+    };
+  }
+
+  calculateServings(product: any): {
+    availableServings: number;
+    isOutOfStock: boolean;
+    ingredientOutOfStock: boolean;
+  } {
+    if (!product) {
+      return {
+        availableServings: 0,
+        isOutOfStock: true,
+        ingredientOutOfStock: true,
+      };
+    }
+
+    const manualSoldOut = Boolean(product.isSoldOutManual);
+
+    if (!Array.isArray(product.recipes) || product.recipes.length === 0) {
+      return {
+        availableServings: 0,
+        isOutOfStock: true,
+        ingredientOutOfStock: true,
+      };
+    }
+
+    const baseRecipes = product.recipes.filter(
+      (r: any) => r.size === 'S' || r.size === 'ALL',
+    );
+    const checkRecipes = baseRecipes.length > 0 ? baseRecipes : product.recipes;
+
+    let minServings = Infinity;
+    let ingredientOutOfStock = false;
+
+    for (const r of checkRecipes) {
+      const ing = r.ingredient || r;
+      const amount = Number(r.amount ?? 1);
+      if (ing && amount > 0) {
+        // Vật tư phụ trợ (isRequiredForSale = false) không khóa món khi hết hàng
+        const isRequired = ing.isRequiredForSale ?? true;
+        if (!isRequired) {
+          continue;
+        }
+
+        const stock = Number(ing.stock ?? 0);
+        const possible = Math.floor(stock / amount);
+        if (possible < minServings) {
+          minServings = possible;
+        }
+        if (stock < amount) {
+          ingredientOutOfStock = true;
+        }
+      }
+    }
+
+    const computedServings =
+      minServings === Infinity ? 99 : Math.max(0, minServings);
+
+    return {
+      availableServings: manualSoldOut ? 0 : computedServings,
+      isOutOfStock: manualSoldOut || ingredientOutOfStock,
+      ingredientOutOfStock,
     };
   }
 
@@ -98,6 +162,8 @@ export class InventoryService {
         stock: dto.stock,
         minThreshold: dto.minThreshold,
         costPerUnit: dto.costPerUnit ?? 0,
+        type: dto.type || 'INGREDIENT',
+        isRequiredForSale: dto.isRequiredForSale ?? true,
       },
     });
     return this.formatIngredient(created);
@@ -136,6 +202,10 @@ export class InventoryService {
           : {}),
         ...(dto.costPerUnit !== undefined
           ? { costPerUnit: dto.costPerUnit }
+          : {}),
+        ...(dto.type !== undefined ? { type: dto.type } : {}),
+        ...(dto.isRequiredForSale !== undefined
+          ? { isRequiredForSale: dto.isRequiredForSale }
           : {}),
         version: { increment: 1 },
       },
@@ -250,6 +320,10 @@ export class InventoryService {
           : {}),
         ...(dto.costPerUnit !== undefined
           ? { costPerUnit: dto.costPerUnit }
+          : {}),
+        ...(dto.type !== undefined ? { type: dto.type } : {}),
+        ...(dto.isRequiredForSale !== undefined
+          ? { isRequiredForSale: dto.isRequiredForSale }
           : {}),
         version: { increment: 1 },
       },
