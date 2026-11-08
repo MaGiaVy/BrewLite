@@ -190,15 +190,72 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    return Array.from(reqMap.values());
+    return Array.from(reqMap.values()).sort(
+      (a, b) => a.ingredientId - b.ingredientId,
+    );
   }
 
   async createOrder(dto: CreateOrderDto, userId: number) {
-    // 1. Tính rawSubtotal server-side
-    const rawSubtotal = dto.items.reduce(
-      (sum, item) => sum + item.unitPrice * item.quantity,
-      0,
+    // 1. Tính rawSubtotal và serverUnitPrice hoàn toàn từ DB
+    const productIds = [...new Set(dto.items.map((i) => i.productId))];
+
+    const products = (this.prisma as any).product?.findMany
+      ? await (this.prisma as any).product.findMany({
+          where: { id: { in: productIds } },
+        })
+      : [];
+
+    const productMap = new Map<number, any>(
+      products.map((p: any) => [p.id, p]),
     );
+
+    const toppingRecipes = (this.prisma as any).toppingRecipe?.findMany
+      ? await (this.prisma as any).toppingRecipe.findMany({
+          where: { isActive: true },
+        })
+      : [];
+
+    let rawSubtotal = 0;
+    const itemServerPrices: number[] = [];
+
+    for (const item of dto.items) {
+      const matchedProduct = productMap.get(item.productId);
+      if (!matchedProduct || matchedProduct.isActive === false) {
+        throw new BadRequestException(
+          `Sản phẩm #${item.productId} không tồn tại hoặc đã ngừng kinh doanh`,
+        );
+      }
+
+      const sizeUpcharge =
+        item.size === 'L'
+          ? (matchedProduct.sizeUpchargeL ?? 8000)
+          : item.size === 'M'
+          ? (matchedProduct.sizeUpchargeM ?? 5000)
+          : 0;
+
+      let toppingSum = 0;
+      if (Array.isArray(item.toppings) && item.toppings.length > 0) {
+        for (const topStr of item.toppings) {
+          if (!topStr || !topStr.trim()) continue;
+          const lowerTop = topStr.toLowerCase().trim();
+          const matchedTopping = toppingRecipes.find(
+            (tr: any) =>
+              tr.toppingId?.toLowerCase() === lowerTop ||
+              tr.toppingName?.toLowerCase() === lowerTop ||
+              tr.toppingName?.toLowerCase().includes(lowerTop) ||
+              lowerTop.includes(tr.toppingName?.toLowerCase()),
+          );
+          toppingSum += matchedTopping
+            ? Number(matchedTopping.price ?? 8000)
+            : 8000;
+        }
+      }
+
+      const serverUnitPrice =
+        Number(matchedProduct.basePrice || 0) + sizeUpcharge + toppingSum;
+      itemServerPrices.push(serverUnitPrice);
+      rawSubtotal += serverUnitPrice * item.quantity;
+    }
 
     // 2. Xử lý mã giảm giá (Voucher / Discount Code từ DB + Fallback mặc định)
     let discountAmount = 0;
@@ -323,6 +380,8 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
         dto.items,
       );
 
+      requiredIngredients.sort((a, b) => a.ingredientId - b.ingredientId);
+
       for (const reqIng of requiredIngredients) {
         const currentIng = await tx.ingredient.findUnique({
           where: { id: reqIng.ingredientId },
@@ -388,13 +447,14 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
           discountAmount,
           userId,
           items: {
-            create: dto.items.map((item) => ({
+            create: dto.items.map((item, idx) => ({
               productId: item.productId,
-              productName: item.productName,
+              productName:
+                item.productName || productMap.get(item.productId)?.name || '',
               size: item.size,
               toppings: item.toppings,
               quantity: item.quantity,
-              unitPrice: item.unitPrice,
+              unitPrice: itemServerPrices[idx],
             })),
           },
         },
@@ -556,11 +616,21 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       throw new NotFoundException(`Không tìm thấy đơn hàng với mã #${orderId}`);
     }
 
-    const isStaffOrAdmin =
-      userRole === Role.STAFF || userRole === Role.ADMIN;
+    const isStaffOrAdmin = userRole === Role.STAFF || userRole === Role.ADMIN;
 
-    if (!isStaffOrAdmin && order.userId !== null && order.userId !== userId) {
-      throw new ForbiddenException('Bạn không có quyền cập nhật đơn hàng này');
+    if (!isStaffOrAdmin) {
+      // Nếu là khách hàng bình thường:
+      if (order.userId === null || order.userId !== userId) {
+        throw new ForbiddenException('Bạn không có quyền thao tác trên đơn hàng này');
+      }
+      // Khách hàng CHỈ ĐƯỢC PHÉP hủy đơn hàng của chính mình (chuyển sang CANCELLED):
+      if (nextStatus !== OrderStatus.CANCELLED) {
+        throw new ForbiddenException('Khách hàng không có quyền tự chuyển trạng thái đơn hàng sang trạng thái này');
+      }
+      // Chỉ được hủy khi đơn đang ở PENDING:
+      if (order.status !== OrderStatus.PENDING) {
+        throw new BadRequestException('Chỉ có thể hủy đơn hàng đang ở trạng thái Chờ thanh toán (PENDING)');
+      }
     }
 
     const previousStatus = order.status;

@@ -155,4 +155,134 @@ describe('ProductsService — Admin Menu CRUD & Visibility Management', () => {
     mockPrisma.product.findUnique.mockResolvedValueOnce(null);
     await expect(service.remove(999)).rejects.toThrow(NotFoundException);
   });
+
+  describe('Task 6 — Bảo mật bí mật kinh doanh BOM & Giá vốn khỏi Menu', () => {
+    it('loại bỏ recipes, cogs, gross profit, margin khi khách hàng xem menu (findAll/findOne không phải ADMIN)', async () => {
+      mockPrisma.product.findMany.mockResolvedValue([
+        {
+          id: 1,
+          name: 'Cà phê Đen',
+          basePrice: 25000,
+          sizeUpchargeM: 5000,
+          sizeUpchargeL: 10000,
+          imageUrl: '/images/products/ca-phe-den.png',
+          description: 'Cà phê đậm đà',
+          category: 'vietnamese',
+          isActive: true,
+          isSoldOutManual: false,
+          recipes: [
+            {
+              id: 1,
+              productId: 1,
+              size: 'S',
+              amount: 25,
+              ingredient: {
+                id: 10,
+                name: 'Hạt Robusta',
+                stock: 500,
+                costPerUnit: 180,
+                isRequiredForSale: true,
+              },
+            },
+          ],
+        },
+      ]);
+
+      const [customerProduct] = await service.findAll(false, false);
+
+      // Các trường nhạy cảm phải bị loại bỏ
+      expect(customerProduct.recipes).toBeUndefined();
+      expect(customerProduct.cogsSizeS).toBeUndefined();
+      expect(customerProduct.cogsSizeM).toBeUndefined();
+      expect(customerProduct.cogsSizeL).toBeUndefined();
+      expect(customerProduct.grossProfitS).toBeUndefined();
+      expect(customerProduct.marginPercentS).toBeUndefined();
+      expect(customerProduct.recipesCount).toBeUndefined();
+      expect(customerProduct.orderItemsCount).toBeUndefined();
+
+      // Các trường khách hàng cần nhận phải có đầy đủ
+      expect(customerProduct).toEqual({
+        id: 1,
+        name: 'Cà phê Đen',
+        basePrice: 25000,
+        sizeUpchargeM: 5000,
+        sizeUpchargeL: 10000,
+        imageUrl: '/images/products/ca-phe-den.png',
+        description: 'Cà phê đậm đà',
+        isOutOfStock: false,
+        availableServings: 20,
+        category: 'vietnamese',
+      });
+    });
+
+    it('giữ nguyên đầy đủ recipes và cogs cho Admin (findAll/findOne với isAdmin = true)', async () => {
+      mockPrisma.product.findMany.mockResolvedValue([
+        {
+          id: 1,
+          name: 'Cà phê Đen',
+          basePrice: 25000,
+          category: 'vietnamese',
+          isActive: true,
+          isSoldOutManual: false,
+          recipes: [
+            {
+              id: 1,
+              productId: 1,
+              size: 'S',
+              amount: 25,
+              ingredient: {
+                id: 10,
+                name: 'Hạt Robusta',
+                stock: 500,
+                costPerUnit: 180,
+                isRequiredForSale: true,
+              },
+            },
+          ],
+        },
+      ]);
+
+      const [adminProduct] = await service.findAll(false, true);
+
+      expect(adminProduct.recipes).toBeDefined();
+      expect(adminProduct.recipes).toHaveLength(1);
+      expect(adminProduct.cogsSizeS).toBe(4500); // 25 * 180
+      expect(adminProduct.grossProfitS).toBe(20500); // 25000 - 4500
+      expect(adminProduct.marginPercentS).toBe(82);
+    });
+
+    it('findOne bảo vệ dữ liệu nhạy cảm cho khách hàng và hiển thị cho Admin', async () => {
+      mockPrisma.product.findUnique.mockResolvedValue({
+        id: 2,
+        name: 'Trà Đào Cam Sả',
+        basePrice: 45000,
+        sizeUpchargeM: 6000,
+        sizeUpchargeL: 12000,
+        imageUrl: '/images/products/tra-dao.png',
+        description: 'Thanh mát',
+        category: 'tea',
+        isActive: true,
+        isSoldOutManual: false,
+        recipes: [
+          {
+            id: 2,
+            size: 'S',
+            amount: 1,
+            ingredient: { stock: 100, costPerUnit: 5000, isRequiredForSale: true },
+          },
+        ],
+      });
+
+      const customerItem = await service.findOne(2, false);
+      expect(customerItem.recipes).toBeUndefined();
+      expect(customerItem.cogsSizeS).toBeUndefined();
+      expect(customerItem.id).toBe(2);
+      expect(customerItem.name).toBe('Trà Đào Cam Sả');
+
+      const adminItem = await service.findOne(2, true);
+      expect(adminItem.recipes).toBeDefined();
+      expect(adminItem.cogsSizeS).toBe(5000);
+      expect(adminItem.grossProfitS).toBe(40000);
+    });
+  });
 });

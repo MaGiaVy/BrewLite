@@ -5,7 +5,7 @@ import {
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
-import { OrderStatus, PaymentMethod, PaymentStatus } from '@prisma/client';
+import { OrderStatus, PaymentMethod, PaymentStatus, Role } from '@prisma/client';
 import { PaymentsService } from './payments.service.js';
 import { MockPaymentService } from './mock-payment.service.js';
 import { assertTransition } from './state-machine.helper.js';
@@ -205,6 +205,51 @@ describe('Task 10 — Payments, State Machine, Idempotency, Optimistic Locking &
         expect(result.paymentId).toBe(101);
         expect(mockPaymentService.processPayment).toHaveBeenCalled();
       });
+
+      it('bắt lỗi Prisma P2002 khi tạo Payment bị trùng idempotencyKey và trả về idempotent response', async () => {
+        // Initial findUnique returns null (request đồng thời chưa tạo xong)
+        mockPrisma.payment.findUnique.mockResolvedValueOnce(null);
+
+        mockPrisma.order.findUnique.mockResolvedValue({
+          id: 5,
+          userId: 1,
+          totalAmount: 85000,
+          status: OrderStatus.PENDING,
+          version: 1,
+        });
+
+        mockPaymentService.processPayment.mockResolvedValue({
+          success: true,
+          transactionId: 'TXN-CONCURRENT',
+          message: 'Thành công',
+        });
+
+        mockPrisma.order.updateMany.mockResolvedValue({ count: 1 });
+
+        // tx.payment.create ném lỗi P2002 Unique constraint
+        mockPrisma.payment.create.mockRejectedValue({ code: 'P2002' });
+
+        // findUnique sau khi bắt P2002 trả về bản ghi của request đồng thời đã tạo thành công
+        mockPrisma.payment.findUnique.mockResolvedValueOnce({
+          id: 105,
+          orderId: 5,
+          amount: 85000,
+          method: PaymentMethod.EWALLET,
+          status: PaymentStatus.SUCCESS,
+          order: { status: OrderStatus.PAID },
+        });
+
+        const result = await service.processPayment(
+          { orderId: 5, method: PaymentMethod.EWALLET },
+          1,
+          'idempotency-key-race',
+        );
+
+        expect(result.isIdempotent).toBe(true);
+        expect(result.paymentId).toBe(105);
+        expect(result.status).toBe(OrderStatus.PAID);
+        expect(result.success).toBe(true);
+      });
     });
 
     describe('Optimistic Locking & Concurrency Control', () => {
@@ -336,6 +381,158 @@ describe('Task 10 — Payments, State Machine, Idempotency, Optimistic Locking &
         expect(mockPrisma.user.update).not.toHaveBeenCalled();
       });
     });
+
+    describe('ZaloPay Sandbox & Replay Attack Protection', () => {
+      let mockZaloPayService: any;
+
+      beforeEach(() => {
+        mockZaloPayService = {
+          createOrder: vi.fn(),
+          verifyCallback: vi.fn(),
+          queryStatus: vi.fn(),
+          createMockCallbackPayload: vi.fn(),
+        };
+        service = new PaymentsService(mockPrisma as any, mockPaymentService as any, mockZaloPayService as any);
+      });
+
+      describe('confirmZaloPaySandbox', () => {
+        it('ném ForbiddenException nếu userId không khớp với chủ đơn hàng và không phải ADMIN', async () => {
+          mockPrisma.order.findUnique.mockResolvedValue({
+            id: 20,
+            userId: 1,
+            totalAmount: 50000,
+            status: OrderStatus.PENDING,
+          });
+
+          await expect(
+            service.confirmZaloPaySandbox(20, 2, Role.CUSTOMER, '261024_20_123'),
+          ).rejects.toThrow(ForbiddenException);
+        });
+
+        it('cho phép ADMIN xác nhận đơn hàng dù không phải chủ đơn', async () => {
+          mockPrisma.order.findUnique.mockResolvedValue({
+            id: 20,
+            userId: 1,
+            totalAmount: 50000,
+            status: OrderStatus.PENDING,
+          });
+
+          mockZaloPayService.createMockCallbackPayload.mockReturnValue({
+            data: JSON.stringify({
+              app_trans_id: '261024_20_123',
+              amount: 50000,
+              zp_trans_id: 12345,
+              embed_data: JSON.stringify({ orderId: 20 }),
+            }),
+            mac: 'valid_mac',
+          });
+          mockZaloPayService.verifyCallback.mockReturnValue(true);
+
+          const result = await service.confirmZaloPaySandbox(20, 99, Role.ADMIN, '261024_20_123');
+          expect(result.success).toBe(true);
+          expect(result.status).toBe(OrderStatus.PAID);
+        });
+
+        it('cho phép khách vãng lai (order.userId === null) xác nhận', async () => {
+          mockPrisma.order.findUnique.mockResolvedValue({
+            id: 21,
+            userId: null,
+            totalAmount: 50000,
+            status: OrderStatus.PENDING,
+          });
+
+          mockZaloPayService.createMockCallbackPayload.mockReturnValue({
+            data: JSON.stringify({
+              app_trans_id: '261024_21_123',
+              amount: 50000,
+              zp_trans_id: 12345,
+              embed_data: JSON.stringify({ orderId: 21 }),
+            }),
+            mac: 'valid_mac',
+          });
+          mockZaloPayService.verifyCallback.mockReturnValue(true);
+
+          const result = await service.confirmZaloPaySandbox(21, 5, Role.CUSTOMER, '261024_21_123');
+          expect(result.success).toBe(true);
+        });
+      });
+
+      describe('cancelZaloPaySandbox', () => {
+        it('ném ForbiddenException nếu userId không khớp với chủ đơn hàng và không phải ADMIN', async () => {
+          mockPrisma.order.findUnique.mockResolvedValue({
+            id: 20,
+            userId: 1,
+            status: OrderStatus.PENDING,
+          });
+
+          await expect(service.cancelZaloPaySandbox(20, 2, Role.CUSTOMER)).rejects.toThrow(
+            ForbiddenException,
+          );
+        });
+
+        it('cho phép ADMIN hủy thanh toán dù không phải chủ đơn', async () => {
+          mockPrisma.order.findUnique.mockResolvedValue({
+            id: 20,
+            userId: 1,
+            status: OrderStatus.PENDING,
+          });
+
+          const result = await service.cancelZaloPaySandbox(20, 99, Role.ADMIN);
+          expect(result.success).toBe(true);
+          expect(result.message).toContain('đã được hủy');
+        });
+      });
+
+      describe('getZaloPayStatus', () => {
+        it('ném BadRequestException nếu số tiền ZaloPay query trả về khác với order.totalAmount', async () => {
+          mockPrisma.order.findUnique.mockResolvedValue({
+            id: 30,
+            userId: 1,
+            status: OrderStatus.PENDING,
+            totalAmount: 100000,
+          });
+
+          mockZaloPayService.queryStatus.mockResolvedValue({
+            returnCode: 1,
+            isProcessing: false,
+            amount: 50000, // Khác 100000
+            zpTransId: 99999,
+          });
+
+          await expect(service.getZaloPayStatus(30, 1, '261024_30_123')).rejects.toThrow(
+            BadRequestException,
+          );
+        });
+      });
+
+      describe('handleZaloPayCallback', () => {
+        it('chống replay attack: nếu order đã CANCELLED thì trả về thông báo và KHÔNG cập nhật PAID', async () => {
+          mockZaloPayService.verifyCallback.mockReturnValue(true);
+
+          const callbackData = {
+            app_trans_id: '261024_40_123',
+            amount: 75000,
+            zp_trans_id: 88888,
+            embed_data: JSON.stringify({ orderId: 40 }),
+          };
+
+          mockPrisma.order.findUnique.mockResolvedValue({
+            id: 40,
+            userId: 1,
+            status: OrderStatus.CANCELLED,
+            totalAmount: 75000,
+          });
+
+          const res = await service.handleZaloPayCallback({
+            data: JSON.stringify(callbackData),
+            mac: 'valid_mac',
+          });
+
+          expect(res.return_code).toBe(1);
+          expect(res.return_message).toBe('Đơn hàng đã hết hạn hoặc bị hủy');
+          expect(mockPrisma.order.update).not.toHaveBeenCalled();
+        });
+      });
+    });
   });
 });
-

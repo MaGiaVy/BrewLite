@@ -19,6 +19,13 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
       create: ReturnType<typeof vi.fn>;
       update: ReturnType<typeof vi.fn>;
     };
+    product: {
+      findMany: ReturnType<typeof vi.fn>;
+      findUnique: ReturnType<typeof vi.fn>;
+    };
+    toppingRecipe: {
+      findMany: ReturnType<typeof vi.fn>;
+    };
     $transaction: ReturnType<typeof vi.fn>;
   };
 
@@ -29,6 +36,45 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
         findUnique: vi.fn(),
         create: vi.fn(),
         update: vi.fn(),
+      },
+      product: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 1,
+            name: 'Cà phê Muối',
+            basePrice: 50000,
+            sizeUpchargeM: 0,
+            sizeUpchargeL: 0,
+            isActive: true,
+          },
+          {
+            id: 4,
+            name: 'Cà phê Muối',
+            basePrice: 42000,
+            sizeUpchargeM: 0,
+            sizeUpchargeL: 8000,
+            isActive: true,
+          },
+          {
+            id: 8,
+            name: 'Bánh Pain au Chocolat',
+            basePrice: 39000,
+            sizeUpchargeM: 0,
+            sizeUpchargeL: 0,
+            isActive: true,
+          },
+        ]),
+        findUnique: vi.fn(),
+      },
+      toppingRecipe: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            toppingId: 'boba',
+            toppingName: 'Trân châu trắng giòn',
+            price: 8000,
+            isActive: true,
+          },
+        ]),
       },
       $transaction: vi.fn(),
     };
@@ -195,11 +241,144 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
       });
 
       await expect(
-        service.updateOrderStatus(105, OrderStatus.COMPLETED, 1),
+        service.updateOrderStatus(105, OrderStatus.COMPLETED, 1, Role.STAFF),
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('cho phép hủy đơn từ trạng thái PAID -> CANCELLED, tự động hoàn kho nguyên vật liệu và thu hồi điểm Loyalty', async () => {
+    it('chặn khách hàng thường (role CUSTOMER) cố tình gọi updateOrderStatus với status: PAID (ném ForbiddenException)', async () => {
+      prisma.order.findUnique.mockResolvedValue({
+        id: 106,
+        userId: 1,
+        status: OrderStatus.PENDING,
+        items: [],
+      });
+
+      await expect(
+        service.updateOrderStatus(106, OrderStatus.PAID, 1, Role.CUSTOMER),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('chặn khách hàng thường tự hủy đơn khi đơn không còn ở trạng thái PENDING (ném BadRequestException)', async () => {
+      prisma.order.findUnique.mockResolvedValue({
+        id: 107,
+        userId: 1,
+        status: OrderStatus.PAID,
+        items: [],
+      });
+
+      await expect(
+        service.updateOrderStatus(107, OrderStatus.CANCELLED, 1, Role.CUSTOMER),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('cho phép khách hàng thường hủy đơn PENDING của chính mình sang CANCELLED, thành công và hoàn trả nguyên liệu kho', async () => {
+      const now = new Date();
+      prisma.order.findUnique.mockResolvedValue({
+        id: 109,
+        userId: 1,
+        status: OrderStatus.PENDING,
+        totalAmount: 50000,
+        items: [
+          {
+            productId: 4,
+            productName: 'Cà phê Muối',
+            size: 'M',
+            toppings: [],
+            quantity: 1,
+            unitPrice: 50000,
+          },
+        ],
+      });
+
+      const mockTx = {
+        recipe: {
+          findMany: vi.fn().mockResolvedValue([
+            {
+              productId: 4,
+              size: 'M',
+              amount: 25,
+              ingredient: {
+                id: 1,
+                code: 'ING_ROBUSTA',
+                name: 'Hạt Cà phê Robusta',
+                unit: 'g',
+              },
+            },
+          ]),
+        },
+        toppingRecipe: {
+          findMany: vi.fn().mockResolvedValue([]),
+        },
+        ingredient: {
+          update: vi.fn().mockResolvedValue({}),
+        },
+        user: {
+          update: vi.fn(),
+        },
+        order: {
+          update: vi.fn().mockResolvedValue({
+            id: 109,
+            status: OrderStatus.CANCELLED,
+            updatedAt: now,
+          }),
+        },
+      };
+
+      prisma.$transaction.mockImplementation(async (cb) => cb(mockTx));
+
+      const result = await service.updateOrderStatus(
+        109,
+        OrderStatus.CANCELLED,
+        1,
+        Role.CUSTOMER,
+      );
+
+      expect(result.previousStatus).toBe(OrderStatus.PENDING);
+      expect(result.status).toBe(OrderStatus.CANCELLED);
+      // Hoàn kho 25g Robusta
+      expect(mockTx.ingredient.update).toHaveBeenCalledWith({
+        where: { id: 1 },
+        data: {
+          stock: { increment: 25 },
+          version: { increment: 1 },
+        },
+      });
+      // Đơn PENDING chưa thanh toán nên không thu hồi điểm loyalty
+      expect(mockTx.user.update).not.toHaveBeenCalled();
+    });
+
+    it('cho phép Staff/Admin cập nhật PAID -> PREPARING thành công', async () => {
+      const now = new Date();
+      prisma.order.findUnique.mockResolvedValue({
+        id: 110,
+        userId: 2,
+        status: OrderStatus.PAID,
+        items: [],
+      });
+      prisma.order.update.mockResolvedValue({
+        id: 110,
+        status: OrderStatus.PREPARING,
+        updatedAt: now,
+      });
+
+      const result = await service.updateOrderStatus(
+        110,
+        OrderStatus.PREPARING,
+        99,
+        Role.STAFF,
+      );
+
+      expect(result.previousStatus).toBe(OrderStatus.PAID);
+      expect(result.status).toBe(OrderStatus.PREPARING);
+      expect(prisma.order.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 110 },
+          data: expect.objectContaining({ status: OrderStatus.PREPARING }),
+        }),
+      );
+    });
+
+    it('cho phép Staff hủy đơn từ trạng thái PAID -> CANCELLED, tự động hoàn kho nguyên vật liệu và thu hồi điểm Loyalty', async () => {
       const now = new Date();
       prisma.order.findUnique.mockResolvedValue({
         id: 108,
@@ -257,8 +436,8 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
       const result = await service.updateOrderStatus(
         108,
         OrderStatus.CANCELLED,
-        5,
-        Role.CUSTOMER,
+        99,
+        Role.STAFF,
       );
 
       expect(result.previousStatus).toBe(OrderStatus.PAID);
@@ -557,6 +736,17 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
     });
 
     it('áp dụng mã BREWCOZY giảm đúng 15% tổng đơn', async () => {
+      prisma.product.findMany.mockResolvedValueOnce([
+        {
+          id: 1,
+          name: 'Cà phê Sữa',
+          basePrice: 100000,
+          sizeUpchargeM: 0,
+          sizeUpchargeL: 0,
+          isActive: true,
+        },
+      ]);
+
       const mockCreatedOrder = {
         id: 202,
         status: OrderStatus.PENDING,
@@ -715,6 +905,99 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
       );
 
       expect(result.discountAmount).toBe(60000);
+    });
+
+    it('tự tính đơn giá từ DB và bỏ qua unitPrice=0 do client gửi lên', async () => {
+      prisma.product.findMany.mockResolvedValueOnce([
+        {
+          id: 4,
+          name: 'Cà phê Muối',
+          basePrice: 42000,
+          sizeUpchargeM: 5000,
+          sizeUpchargeL: 8000,
+          isActive: true,
+        },
+      ]);
+      prisma.toppingRecipe.findMany.mockResolvedValueOnce([
+        {
+          toppingId: 'boba',
+          toppingName: 'Trân châu trắng giòn',
+          price: 8000,
+          isActive: true,
+        },
+      ]);
+
+      let capturedCreateData: any = null;
+      prisma.$transaction.mockImplementation(async (cb) => {
+        return cb({
+          recipe: { findMany: vi.fn().mockResolvedValue([]) },
+          toppingRecipe: { findMany: vi.fn().mockResolvedValue([]) },
+          ingredient: { findUnique: vi.fn(), updateMany: vi.fn() },
+          order: {
+            create: vi.fn().mockImplementation(({ data }) => {
+              capturedCreateData = data;
+              return Promise.resolve({
+                id: 501,
+                status: OrderStatus.PENDING,
+                discountCode: null,
+                discountAmount: 0,
+                ...data,
+              });
+            }),
+          },
+        });
+      });
+
+      const result = await service.createOrder(
+        {
+          items: [
+            {
+              productId: 4,
+              productName: 'Cà phê Muối',
+              size: 'M',
+              toppings: ['Trân châu trắng giòn'],
+              quantity: 2,
+              unitPrice: 0, // Client cố tình hack giá = 0đ
+            },
+          ],
+        },
+        1,
+      );
+
+      // Backend tự tính đơn giá: 42.000 + 5.000 (size M) + 8.000 (topping) = 55.000đ/ly
+      // Subtotal = 55.000 * 2 = 110.000đ, VAT 8% = 8.800đ -> totalAmount = 118.000đ
+      expect(capturedCreateData.items.create[0].unitPrice).toBe(55000);
+      expect(capturedCreateData.totalAmount).toBe(118000);
+      expect(result.totalAmount).toBe(118000);
+    });
+
+    it('ném BadRequestException khi sản phẩm không tồn tại hoặc đã ngừng kinh doanh (isActive=false)', async () => {
+      prisma.product.findMany.mockResolvedValueOnce([
+        {
+          id: 99,
+          name: 'Món đã ngừng bán',
+          basePrice: 50000,
+          isActive: false,
+        },
+      ]);
+
+      await expect(
+        service.createOrder(
+          {
+            items: [
+              {
+                productId: 99,
+                productName: 'Món đã ngừng bán',
+                size: 'M',
+                toppings: [],
+                quantity: 1,
+                unitPrice: 50000,
+              },
+            ],
+          },
+          1,
+        ),
+      ).rejects.toThrow(BadRequestException);
     });
   });
 });

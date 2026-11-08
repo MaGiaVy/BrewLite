@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ConflictException, NotFoundException } from '@nestjs/common';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
+import { UpsertRecipeDto, UpdateRecipeDto } from './dto/inventory.dto.js';
 import { InventoryService } from './inventory.service.js';
 
 describe('InventoryService — Sprint 4 (Admin BOM Warehouse, Full CRUD & Optimistic Locking)', () => {
@@ -15,6 +18,7 @@ describe('InventoryService — Sprint 4 (Admin BOM Warehouse, Full CRUD & Optimi
         update: vi.fn(),
         updateMany: vi.fn(),
         delete: vi.fn(),
+        count: vi.fn(),
       },
       product: {
         findMany: vi.fn(),
@@ -25,6 +29,7 @@ describe('InventoryService — Sprint 4 (Admin BOM Warehouse, Full CRUD & Optimi
         upsert: vi.fn(),
         update: vi.fn(),
         delete: vi.fn(),
+        count: vi.fn(),
       },
       toppingRecipe: {
         findMany: vi.fn(),
@@ -32,6 +37,7 @@ describe('InventoryService — Sprint 4 (Admin BOM Warehouse, Full CRUD & Optimi
         upsert: vi.fn(),
         update: vi.fn(),
         delete: vi.fn(),
+        count: vi.fn(),
       },
       inventoryLog: {
         create: vi.fn(),
@@ -47,6 +53,7 @@ describe('InventoryService — Sprint 4 (Admin BOM Warehouse, Full CRUD & Optimi
         create: vi.fn(),
         update: vi.fn(),
         delete: vi.fn(),
+        count: vi.fn(),
       },
       order: {
         findMany: vi.fn(),
@@ -282,5 +289,104 @@ describe('InventoryService — Sprint 4 (Admin BOM Warehouse, Full CRUD & Optimi
     });
     expect(voucher.code).toBe('SUMMER20');
     expect(voucher.discountPercent).toBe(20);
+  });
+
+  describe('Task 6 — Chống Cascade Delete nguyên liệu & Validation DTO Size', () => {
+    it('chặn xóa nguyên liệu khi đang được sử dụng trong công thức Recipe (chống Cascade Delete)', async () => {
+      mockPrisma.ingredient.findUnique.mockResolvedValue({
+        id: 1,
+        code: 'ING_ROBUSTA',
+        name: 'Hạt Cà phê Robusta',
+      });
+      mockPrisma.recipe.count.mockResolvedValue(3);
+
+      await expect(service.deleteIngredient(1)).rejects.toThrow(ConflictException);
+      await expect(service.deleteIngredient(1)).rejects.toThrow(
+        'Không thể xóa nguyên liệu vì đang được sử dụng trong công thức món. Vui lòng gỡ khỏi công thức trước.',
+      );
+      expect(mockPrisma.ingredient.delete).not.toHaveBeenCalled();
+    });
+
+    it('chặn xóa nguyên liệu khi đang được sử dụng trong ToppingRecipe (chống Cascade Delete)', async () => {
+      mockPrisma.ingredient.findUnique.mockResolvedValue({
+        id: 2,
+        code: 'ING_BOBA',
+        name: 'Trân châu đen',
+      });
+      mockPrisma.recipe.count.mockResolvedValue(0);
+      mockPrisma.toppingRecipe.count.mockResolvedValue(1);
+
+      await expect(service.deleteIngredient(2)).rejects.toThrow(ConflictException);
+      await expect(service.deleteIngredient(2)).rejects.toThrow(
+        'Không thể xóa nguyên liệu vì đang được sử dụng trong công thức món. Vui lòng gỡ khỏi công thức trước.',
+      );
+      expect(mockPrisma.ingredient.delete).not.toHaveBeenCalled();
+    });
+
+    it('cho phép xóa nguyên liệu thành công khi không còn liên kết với công thức món nào', async () => {
+      mockPrisma.ingredient.findUnique.mockResolvedValue({
+        id: 99,
+        code: 'ING_UNUSED',
+        name: 'Nguyên liệu không dùng',
+      });
+      mockPrisma.recipe.count.mockResolvedValue(0);
+      mockPrisma.toppingRecipe.count.mockResolvedValue(0);
+      mockPrisma.ingredient.delete.mockResolvedValue({ id: 99 });
+
+      const res = await service.deleteIngredient(99);
+
+      expect(res.deleted).toBe(true);
+      expect(res.id).toBe(99);
+      expect(mockPrisma.ingredient.delete).toHaveBeenCalledWith({ where: { id: 99 } });
+    });
+
+    it('ném NotFoundException khi xóa nguyên liệu không tồn tại', async () => {
+      mockPrisma.ingredient.findUnique.mockResolvedValue(null);
+      await expect(service.deleteIngredient(404)).rejects.toThrow(NotFoundException);
+    });
+
+    it('UpsertRecipeDto từ chối size không hợp lệ và chấp nhận size S, M, L, ALL', async () => {
+      const invalidDto = plainToInstance(UpsertRecipeDto, {
+        productId: 1,
+        ingredientId: 1,
+        size: 'XL',
+        amount: 20,
+      });
+      const errors = await validate(invalidDto);
+      expect(errors.length).toBeGreaterThan(0);
+      expect(errors[0].constraints?.isIn).toBe(
+        'Size công thức chỉ được là S, M, L hoặc ALL',
+      );
+
+      for (const validSize of ['S', 'M', 'L', 'ALL']) {
+        const validDto = plainToInstance(UpsertRecipeDto, {
+          productId: 1,
+          ingredientId: 1,
+          size: validSize,
+          amount: 20,
+        });
+        const validErrors = await validate(validDto);
+        expect(validErrors.length).toBe(0);
+      }
+    });
+
+    it('UpdateRecipeDto kiểm tra size hợp lệ', async () => {
+      const invalidUpdate = plainToInstance(UpdateRecipeDto, {
+        size: 'INVALID_SIZE',
+        amount: 15,
+      });
+      const errors = await validate(invalidUpdate);
+      expect(errors.length).toBeGreaterThan(0);
+      expect(errors[0].constraints?.isIn).toBe(
+        'Size công thức chỉ được là S, M, L hoặc ALL',
+      );
+
+      const validUpdate = plainToInstance(UpdateRecipeDto, {
+        size: 'M',
+        amount: 15,
+      });
+      const validErrors = await validate(validUpdate);
+      expect(validErrors.length).toBe(0);
+    });
   });
 });

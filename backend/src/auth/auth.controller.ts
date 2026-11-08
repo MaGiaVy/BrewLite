@@ -67,23 +67,15 @@ export class AuthController {
     @Body()
     body: {
       points: number;
-      description?: string;
       voucherCode?: string;
-      discountPercent?: number;
-      minOrderAmount?: number;
+      description?: string;
     },
   ) {
     return this.authService.redeemPoints(
       req.user.userId,
       Number(body?.points || 0),
       body?.description,
-      body?.voucherCode
-        ? {
-            code: body.voucherCode,
-            discountPercent: Number(body.discountPercent || 10),
-            minOrderAmount: Number(body.minOrderAmount || 0),
-          }
-        : undefined,
+      body?.voucherCode,
     );
   }
 
@@ -96,4 +88,3 @@ export class AuthController {
     return this.authService.getUserVouchers(req.user.userId);
   }
 }
-

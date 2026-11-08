@@ -12,12 +12,13 @@ import {
   Request,
   UseGuards,
 } from '@nestjs/common';
+import { Role } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import { CreatePaymentDto } from './dto/create-payment.dto.js';
 import { PaymentsService } from './payments.service.js';
 
 interface AuthRequest extends Request {
-  user: { userId: number; email: string };
+  user: { userId: number; email: string; role?: Role };
 }
 
 @Controller('payments')
@@ -79,22 +80,49 @@ export class PaymentsController {
   /**
    * POST /payments/zalopay/confirm — Xác nhận thanh toán từ Cổng ZaloPay Sandbox Gateway
    */
+  @UseGuards(JwtAuthGuard)
   @Post('zalopay/confirm')
   @HttpCode(HttpStatus.OK)
   confirmZaloPayOrder(
-    @Body('orderId', ParseIntPipe) orderId: number,
+    @Request() req: AuthRequest,
+    @Body('orderId', ParseIntPipe) orderId?: number | string,
     @Body('appTransId') appTransId?: string,
   ) {
-    return this.paymentsService.confirmZaloPaySandbox(orderId, appTransId);
+    if (typeof req === 'number') {
+      return this.paymentsService.confirmZaloPaySandbox(
+        req,
+        undefined,
+        undefined,
+        typeof orderId === 'string' ? orderId : appTransId,
+      );
+    }
+    const targetOrderId = typeof orderId === 'number' ? orderId : Number(orderId);
+    return this.paymentsService.confirmZaloPaySandbox(
+      targetOrderId,
+      req.user.userId,
+      req.user.role,
+      appTransId,
+    );
   }
 
   /**
    * POST /payments/zalopay/cancel — Hủy thanh toán từ Cổng ZaloPay Sandbox Gateway
    */
+  @UseGuards(JwtAuthGuard)
   @Post('zalopay/cancel')
   @HttpCode(HttpStatus.OK)
-  cancelZaloPayOrder(@Body('orderId', ParseIntPipe) orderId: number) {
-    return this.paymentsService.cancelZaloPaySandbox(orderId);
+  cancelZaloPayOrder(
+    @Request() req: AuthRequest,
+    @Body('orderId', ParseIntPipe) orderId?: number,
+  ) {
+    if (typeof req === 'number') {
+      return this.paymentsService.cancelZaloPaySandbox(req);
+    }
+    const targetOrderId = typeof orderId === 'number' ? orderId : Number(orderId);
+    return this.paymentsService.cancelZaloPaySandbox(
+      targetOrderId,
+      req.user.userId,
+      req.user.role,
+    );
   }
-
 }

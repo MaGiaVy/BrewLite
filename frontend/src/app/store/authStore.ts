@@ -179,5 +179,19 @@ export async function apiFetch(
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
   }
-  return fetch(`${API_BASE}${path}`, { ...options, headers });
+  const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  if (res.status === 401) {
+    useAuthStore.getState().logout();
+    if (typeof window !== "undefined") {
+      const currentPath = `${window.location.pathname}${window.location.search || ""}`;
+      if (!window.location.pathname.startsWith("/login")) {
+        try {
+          window.location.href = `/login?redirect=${encodeURIComponent(currentPath || "/checkout")}`;
+        } catch {
+          // ignore in test environment
+        }
+      }
+    }
+  }
+  return res;
 }

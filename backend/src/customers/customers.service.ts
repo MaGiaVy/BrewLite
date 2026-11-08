@@ -40,6 +40,7 @@ export class CustomersService {
         email: true,
         fullName: true,
         phone: true,
+        role: true,
         isActive: true,
         loyaltyPoints: true,
         createdAt: true,
@@ -49,8 +50,8 @@ export class CustomersService {
       },
     });
 
-    if (!customer) {
-      throw new NotFoundException(`Không tìm thấy khách hàng với ID ${id}`);
+    if (!customer || customer.role !== Role.CUSTOMER) {
+      throw new NotFoundException(`Không tìm thấy khách hàng với ID #${id}`);
     }
 
     return customer;
@@ -93,8 +94,8 @@ export class CustomersService {
 
   async updateCustomer(id: number, dto: UpdateCustomerDto) {
     const user = await this.prisma.user.findUnique({ where: { id } });
-    if (!user) {
-      throw new NotFoundException(`Không tìm thấy khách hàng với ID ${id}`);
+    if (!user || user.role !== Role.CUSTOMER) {
+      throw new NotFoundException(`Không tìm thấy khách hàng với ID #${id}`);
     }
 
     const data: {
@@ -138,8 +139,8 @@ export class CustomersService {
 
   async toggleCustomerStatus(id: number, isActive: boolean) {
     const user = await this.prisma.user.findUnique({ where: { id } });
-    if (!user) {
-      throw new NotFoundException(`Không tìm thấy khách hàng với ID ${id}`);
+    if (!user || user.role !== Role.CUSTOMER) {
+      throw new NotFoundException(`Không tìm thấy khách hàng với ID #${id}`);
     }
 
     return this.prisma.user.update({
@@ -159,8 +160,8 @@ export class CustomersService {
 
   async deleteCustomer(id: number) {
     const user = await this.prisma.user.findUnique({ where: { id } });
-    if (!user) {
-      throw new NotFoundException(`Không tìm thấy khách hàng với ID ${id}`);
+    if (!user || user.role !== Role.CUSTOMER) {
+      throw new NotFoundException(`Không tìm thấy khách hàng với ID #${id}`);
     }
 
     const ordersCount = await this.prisma.order.count({

@@ -7,6 +7,7 @@ import {
   ParseIntPipe,
   Patch,
   Post,
+  Request,
   UseGuards,
 } from '@nestjs/common';
 import { Role } from '@prisma/client';
@@ -34,28 +35,30 @@ export class UsersController {
   }
 
   @Post()
-  createStaff(@Body() dto: CreateStaffDto) {
-    return this.usersService.createStaff(dto);
+  createStaff(@Request() req: any, @Body() dto: CreateStaffDto) {
+    return this.usersService.createStaff(dto, req.user);
   }
 
   @Patch(':id')
   updateStaff(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateStaffDto,
+    @Request() req: any,
   ) {
-    return this.usersService.updateStaff(id, dto);
+    return this.usersService.updateStaff(id, dto, req.user?.userId);
   }
 
   @Patch(':id/status')
   toggleStaffStatus(
     @Param('id', ParseIntPipe) id: number,
     @Body('isActive') isActive: boolean,
+    @Request() req: any,
   ) {
-    return this.usersService.toggleStaffStatus(id, isActive);
+    return this.usersService.toggleStaffStatus(id, isActive, req.user?.userId);
   }
 
   @Delete(':id')
-  deleteStaff(@Param('id', ParseIntPipe) id: number) {
-    return this.usersService.deleteStaff(id);
+  deleteStaff(@Param('id', ParseIntPipe) id: number, @Request() req: any) {
+    return this.usersService.deleteStaff(id, req.user?.userId);
   }
 }

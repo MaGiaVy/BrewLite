@@ -205,11 +205,15 @@ function BrandColumn({ mode }: { mode: AuthMode }) {
 
 // ─── Main Client Component ────────────────────────────────────────────────────
 
-export default function LoginClient() {
+export default function LoginClient({
+  initialMode,
+}: {
+  initialMode?: AuthMode;
+} = {}) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const redirectParam = searchParams.get("redirect");
-  const defaultTab = (searchParams.get("tab") as AuthMode) ?? "login";
+  const defaultTab = (searchParams.get("tab") as AuthMode) ?? initialMode ?? "login";
 
   const { user, setAuth, isAuthenticated, _hasHydrated } = useAuthStore();
   const { cartCount } = useCartStore();
@@ -268,7 +272,21 @@ export default function LoginClient() {
     e.preventDefault();
     setError(null);
 
+    if (!email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      setError("Email không đúng định dạng. Vui lòng kiểm tra lại.");
+      return;
+    }
+
+    if (!password || password.length < 6) {
+      setError("Mật khẩu phải có ít nhất 6 ký tự.");
+      return;
+    }
+
     if (mode === "register") {
+      if (!fullName.trim()) {
+        setError("Họ và tên không được để trống.");
+        return;
+      }
       if (password !== confirmPassword) {
         setError("Mật khẩu xác nhận không khớp. Vui lòng thử lại.");
         return;

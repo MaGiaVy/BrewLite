@@ -1484,11 +1484,14 @@ export default function CartPage() {
           <button
             type="button"
             onClick={handleCheckout}
-            className="w-full flex items-center justify-between bg-[#221811] hover:bg-[#2c1810] text-white px-5 py-3.5 rounded-xl transition-colors font-body shadow-md active:scale-98"
+            disabled={checkoutLoading}
+            className={`w-full flex items-center justify-between bg-[#221811] hover:bg-[#2c1810] text-white px-5 py-3.5 rounded-xl transition-colors font-body shadow-md active:scale-98 ${checkoutLoading ? "opacity-50 cursor-not-allowed pointer-events-none" : ""}`}
             id="mobileCheckoutBtn"
           >
             <span className="text-[14px] font-bold">
-              {"Thanh toán".normalize("NFC")}
+              {checkoutLoading
+                ? "Đang xử lý đơn...".normalize("NFC")
+                : "Thanh toán".normalize("NFC")}
             </span>
             <div className="flex items-center gap-1.5">
               <span className="text-[14px] font-bold">

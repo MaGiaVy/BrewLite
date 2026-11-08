@@ -1,4 +1,8 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateStaffDto } from './dto/create-staff.dto.js';
 import { UpdateStaffDto } from './dto/update-staff.dto.js';
@@ -25,7 +29,7 @@ export class UsersService {
         role: true,
         isActive: true,
         createdAt: true,
-              },
+      },
       orderBy: {
         id: 'asc',
       },
@@ -45,7 +49,7 @@ export class UsersService {
         role: true,
         isActive: true,
         createdAt: true,
-              },
+      },
     });
     if (!user) {
       throw new NotFoundException(`Không tìm thấy nhân viên với ID ${id}`);
@@ -53,12 +57,46 @@ export class UsersService {
     return user;
   }
 
-  async createStaff(dto: CreateStaffDto) {
+  async createStaff(
+    dto: CreateStaffDto,
+    creator?: { userId?: number; email?: string; role?: Role } | string | number,
+  ) {
     const existing = await this.prisma.user.findUnique({
       where: { email: dto.email.toLowerCase().trim() },
     });
     if (existing) {
       throw new BadRequestException('Email này đã được sử dụng');
+    }
+
+    const requestedRole = dto.role || Role.STAFF;
+
+    if (requestedRole !== Role.STAFF) {
+      let creatorEmail: string | undefined;
+
+      if (typeof creator === 'string') {
+        creatorEmail = creator;
+      } else if (creator && typeof creator === 'object') {
+        creatorEmail = creator.email;
+        if (!creatorEmail && creator.userId) {
+          const creatorUser = await this.prisma.user.findUnique({
+            where: { id: creator.userId },
+            select: { email: true },
+          });
+          creatorEmail = creatorUser?.email;
+        }
+      } else if (typeof creator === 'number') {
+        const creatorUser = await this.prisma.user.findUnique({
+          where: { id: creator },
+          select: { email: true },
+        });
+        creatorEmail = creatorUser?.email;
+      }
+
+      if (creatorEmail !== 'admin@brewlite.vn') {
+        throw new BadRequestException(
+          'Chỉ Quản trị viên Tối cao (Root Admin) mới có quyền tạo tài khoản Quản trị viên (Admin)',
+        );
+      }
     }
 
     const hashedPassword = await bcrypt.hash(dto.password, 10);
@@ -70,7 +108,7 @@ export class UsersService {
         fullName: dto.fullName.trim(),
         phone: dto.phone ? dto.phone.trim() : null,
         position: dto.position ? dto.position.trim() : 'Nhân viên',
-        role: dto.role || Role.STAFF,
+        role: requestedRole,
         isActive: true,
       },
       select: {
@@ -88,10 +126,47 @@ export class UsersService {
     return user;
   }
 
-  async updateStaff(id: number, dto: UpdateStaffDto) {
+  async updateStaff(
+    id: number,
+    dto: UpdateStaffDto,
+    currentAdminId?: number,
+  ) {
+    if (dto.isActive === false && currentAdminId && id === currentAdminId) {
+      throw new BadRequestException(
+        'Bạn không thể tự khóa hoặc xóa tài khoản của chính mình',
+      );
+    }
+
     const user = await this.prisma.user.findUnique({ where: { id } });
     if (!user) {
       throw new NotFoundException(`Không tìm thấy nhân viên với ID ${id}`);
+    }
+
+    if (user.email === 'admin@brewlite.vn') {
+      if (dto.isActive === false) {
+        throw new BadRequestException(
+          'Tài khoản Quản trị viên Tối cao (Root Admin) không thể bị xóa hoặc vô hiệu hóa',
+        );
+      }
+      if (dto.role && dto.role !== Role.ADMIN) {
+        throw new BadRequestException(
+          'Không thể thay đổi vai trò của Quản trị viên Tối cao (Root Admin)',
+        );
+      }
+    }
+
+    if (user.role === Role.ADMIN && dto.isActive === false) {
+      const activeAdminCount = await this.prisma.user.count({
+        where: {
+          role: Role.ADMIN,
+          isActive: true,
+        },
+      });
+      if (activeAdminCount <= 1) {
+        throw new BadRequestException(
+          'Không thể vô hiệu hóa Admin duy nhất còn hoạt động trong hệ thống',
+        );
+      }
     }
 
     if (dto.email && dto.email.toLowerCase().trim() !== user.email) {
@@ -99,15 +174,20 @@ export class UsersService {
         where: { email: dto.email.toLowerCase().trim() },
       });
       if (emailExists) {
-        throw new BadRequestException('Email này đã được tài khoản khác sử dụng');
+        throw new BadRequestException(
+          'Email này đã được tài khoản khác sử dụng',
+        );
       }
     }
 
     const updateData: any = {};
-    if (dto.email !== undefined) updateData.email = dto.email.toLowerCase().trim();
+    if (dto.email !== undefined)
+      updateData.email = dto.email.toLowerCase().trim();
     if (dto.fullName !== undefined) updateData.fullName = dto.fullName.trim();
-    if (dto.phone !== undefined) updateData.phone = dto.phone ? dto.phone.trim() : null;
-    if (dto.position !== undefined) updateData.position = dto.position ? dto.position.trim() : null;
+    if (dto.phone !== undefined)
+      updateData.phone = dto.phone ? dto.phone.trim() : null;
+    if (dto.position !== undefined)
+      updateData.position = dto.position ? dto.position.trim() : null;
     if (dto.role !== undefined) updateData.role = dto.role;
     if (dto.isActive !== undefined) updateData.isActive = dto.isActive;
     if (dto.password) {
@@ -125,16 +205,46 @@ export class UsersService {
         position: true,
         role: true,
         isActive: true,
-              },
+      },
     });
 
     return updated;
   }
 
-  async toggleStaffStatus(id: number, isActive: boolean) {
+  async toggleStaffStatus(
+    id: number,
+    isActive: boolean,
+    currentAdminId?: number,
+  ) {
+    if (currentAdminId && id === currentAdminId) {
+      throw new BadRequestException(
+        'Bạn không thể tự khóa hoặc xóa tài khoản của chính mình',
+      );
+    }
+
     const user = await this.prisma.user.findUnique({ where: { id } });
     if (!user) {
       throw new NotFoundException(`Không tìm thấy nhân viên với ID ${id}`);
+    }
+
+    if (user.email === 'admin@brewlite.vn') {
+      throw new BadRequestException(
+        'Tài khoản Quản trị viên Tối cao (Root Admin) không thể bị xóa hoặc vô hiệu hóa',
+      );
+    }
+
+    if (user.role === Role.ADMIN && isActive === false) {
+      const activeAdminCount = await this.prisma.user.count({
+        where: {
+          role: Role.ADMIN,
+          isActive: true,
+        },
+      });
+      if (activeAdminCount <= 1) {
+        throw new BadRequestException(
+          'Không thể vô hiệu hóa Admin duy nhất còn hoạt động trong hệ thống',
+        );
+      }
     }
 
     return this.prisma.user.update({
@@ -149,10 +259,36 @@ export class UsersService {
     });
   }
 
-  async deleteStaff(id: number) {
+  async deleteStaff(id: number, currentAdminId?: number) {
+    if (currentAdminId && id === currentAdminId) {
+      throw new BadRequestException(
+        'Bạn không thể tự khóa hoặc xóa tài khoản của chính mình',
+      );
+    }
+
     const user = await this.prisma.user.findUnique({ where: { id } });
     if (!user) {
       throw new NotFoundException(`Không tìm thấy nhân viên với ID ${id}`);
+    }
+
+    if (user.email === 'admin@brewlite.vn') {
+      throw new BadRequestException(
+        'Tài khoản Quản trị viên Tối cao (Root Admin) không thể bị xóa hoặc vô hiệu hóa',
+      );
+    }
+
+    if (user.role === Role.ADMIN) {
+      const activeAdminCount = await this.prisma.user.count({
+        where: {
+          role: Role.ADMIN,
+          isActive: true,
+        },
+      });
+      if (activeAdminCount <= 1) {
+        throw new BadRequestException(
+          'Không thể xóa Admin duy nhất còn hoạt động trong hệ thống',
+        );
+      }
     }
 
     try {

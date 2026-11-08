@@ -69,4 +69,26 @@ describe('OrdersController', () => {
     );
     expect(result).toEqual(mockResult);
   });
+
+  it('updateOrderStatus should forward customer role when customer cancels order', async () => {
+    const mockReq = {
+      user: { userId: 5, email: 'customer@brewlite.com', role: 'CUSTOMER' },
+    };
+    const mockResult = { orderId: 10, status: 'CANCELLED' };
+    service.updateOrderStatus.mockResolvedValue(mockResult);
+
+    const result = await controller.updateOrderStatus(
+      mockReq as any,
+      10,
+      { status: 'CANCELLED' as any },
+    );
+
+    expect(service.updateOrderStatus).toHaveBeenCalledWith(
+      10,
+      'CANCELLED',
+      5,
+      'CUSTOMER',
+    );
+    expect(result).toEqual(mockResult);
+  });
 });

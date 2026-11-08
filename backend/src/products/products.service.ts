@@ -13,6 +13,7 @@ export class ProductsService {
   private enrichProductStock(
     product: any,
     orderCountMap?: Record<number, number>,
+    isAdmin = false,
   ) {
     if (!product) return product;
 
@@ -20,6 +21,20 @@ export class ProductsService {
     const basePrice = Number(product.basePrice || 0);
 
     if (!Array.isArray(product.recipes) || product.recipes.length === 0) {
+      if (!isAdmin) {
+        return {
+          id: product.id,
+          name: product.name,
+          basePrice,
+          sizeUpchargeM: product.sizeUpchargeM ?? null,
+          sizeUpchargeL: product.sizeUpchargeL ?? null,
+          imageUrl: product.imageUrl ?? null,
+          description: product.description ?? null,
+          isOutOfStock: true,
+          availableServings: 0,
+          category: product.category,
+        };
+      }
       return {
         ...product,
         isOutOfStock: true, // Tự động khóa đặt món nếu chưa có công thức BOM
@@ -64,6 +79,21 @@ export class ProductsService {
     const computedServings =
       minServings === Infinity ? 99 : Math.max(0, minServings);
 
+    if (!isAdmin) {
+      return {
+        id: product.id,
+        name: product.name,
+        basePrice,
+        sizeUpchargeM: product.sizeUpchargeM ?? null,
+        sizeUpchargeL: product.sizeUpchargeL ?? null,
+        imageUrl: product.imageUrl ?? null,
+        description: product.description ?? null,
+        isOutOfStock: manualSoldOut || ingredientOutOfStock,
+        availableServings: manualSoldOut ? 0 : computedServings,
+        category: product.category,
+      };
+    }
+
     // Tính Giá vốn (COGS) theo từng Size (S, M, L) dựa trên Recipe.amount * Ingredient.costPerUnit
     const calcCogsForSize = (targetSize: string) => {
       const sizeRecs = product.recipes.filter(
@@ -103,7 +133,7 @@ export class ProductsService {
     };
   }
 
-  async findAll(includeInactive = false) {
+  async findAll(includeInactive = false, isAdmin: boolean = includeInactive) {
     const products = await this.prisma.product.findMany({
       ...(includeInactive ? {} : { where: { isActive: true } }),
       include: {
@@ -131,10 +161,10 @@ export class ProductsService {
       }
     }
 
-    return products.map((p) => this.enrichProductStock(p, orderCountMap));
+    return products.map((p) => this.enrichProductStock(p, orderCountMap, isAdmin));
   }
 
-  async findOne(id: number) {
+  async findOne(id: number, isAdmin = false) {
     const product = await this.prisma.product.findUnique({
       where: { id },
       include: {
@@ -149,7 +179,7 @@ export class ProductsService {
     if (!product) {
       throw new NotFoundException(`Product #${id} not found`);
     }
-    return this.enrichProductStock(product);
+    return this.enrichProductStock(product, undefined, isAdmin);
   }
 
   async create(dto: CreateProductDto) {
@@ -174,7 +204,7 @@ export class ProductsService {
         },
       },
     });
-    return this.enrichProductStock(created);
+    return this.enrichProductStock(created, undefined, true);
   }
 
   async update(id: number, dto: UpdateProductDto) {
@@ -214,7 +244,7 @@ export class ProductsService {
       },
     });
 
-    return this.enrichProductStock(updated);
+    return this.enrichProductStock(updated, undefined, true);
   }
 
   async toggleVisibility(id: number, dto: ToggleProductVisibilityDto) {
@@ -238,7 +268,7 @@ export class ProductsService {
       },
     });
 
-    return this.enrichProductStock(updated);
+    return this.enrichProductStock(updated, undefined, true);
   }
 
   async remove(id: number) {

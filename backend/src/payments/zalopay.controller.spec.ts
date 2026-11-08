@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { OrderStatus, PaymentMethod, PaymentStatus } from '@prisma/client';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
+import { OrderStatus, PaymentMethod, PaymentStatus, Role } from '@prisma/client';
 import { PaymentsService } from './payments.service.js';
 import { PaymentsController } from './payments.controller.js';
 
@@ -152,6 +153,33 @@ describe('ZaloPay Integration — Service & Controller Endpoints', () => {
       expect(res.return_code).toBe(1);
       expect(mockPrisma.order.update).not.toHaveBeenCalled();
     });
+
+    it('chống replay attack: từ chối cập nhật PAID và trả về thông báo nếu đơn hàng đã CANCELLED', async () => {
+      mockZaloPayService.verifyCallback.mockReturnValue(true);
+
+      const callbackData = {
+        app_trans_id: '261023_77_998877',
+        amount: 110000,
+        zp_trans_id: 12345678,
+        embed_data: JSON.stringify({ orderId: 77 }),
+      };
+
+      mockPrisma.order.findUnique.mockResolvedValue({
+        id: 77,
+        userId: 1,
+        status: OrderStatus.CANCELLED,
+        totalAmount: 110000,
+      });
+
+      const res = await controller.handleZaloPayCallback({
+        data: JSON.stringify(callbackData),
+        mac: 'valid_mac_key2',
+      });
+
+      expect(res.return_code).toBe(1);
+      expect(res.return_message).toBe('Đơn hàng đã hết hạn hoặc bị hủy');
+      expect(mockPrisma.order.update).not.toHaveBeenCalled();
+    });
   });
 
   describe('GET /payments/zalopay/status/:orderId', () => {
@@ -196,6 +224,28 @@ describe('ZaloPay Integration — Service & Controller Endpoints', () => {
         }),
       );
     });
+
+    it('ném BadRequestException nếu số tiền query trên ZaloPay không khớp với totalAmount của đơn', async () => {
+      mockPrisma.order.findUnique.mockResolvedValue({
+        id: 77,
+        userId: 1,
+        status: OrderStatus.PENDING,
+        totalAmount: 110000,
+      });
+
+      mockZaloPayService.queryStatus.mockResolvedValue({
+        returnCode: 1,
+        isProcessing: false,
+        amount: 50000, // Sai lệch số tiền
+        zpTransId: 98765432,
+      });
+
+      const req: any = { user: { userId: 1, email: 'test@brewlite.com' } };
+      await expect(controller.getZaloPayStatus(req, 77, '261023_77_123456')).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(mockPrisma.order.update).not.toHaveBeenCalled();
+    });
   });
 
   describe('POST /payments/zalopay/confirm & cancel', () => {
@@ -218,7 +268,8 @@ describe('ZaloPay Integration — Service & Controller Endpoints', () => {
       });
       mockZaloPayService.verifyCallback.mockReturnValue(true);
 
-      const res = await controller.confirmZaloPayOrder(77, '261024_77_112233');
+      const req: any = { user: { userId: 1, email: 'test@brewlite.com', role: Role.CUSTOMER } };
+      const res = await controller.confirmZaloPayOrder(req, 77, '261024_77_112233');
       expect(res.success).toBe(true);
       expect(res.status).toBe(OrderStatus.PAID);
       expect(mockPrisma.order.update).toHaveBeenCalledWith(
@@ -229,6 +280,45 @@ describe('ZaloPay Integration — Service & Controller Endpoints', () => {
       );
     });
 
+    it('confirmZaloPayOrder ném ForbiddenException nếu không phải chủ đơn hàng và không phải admin', async () => {
+      mockPrisma.order.findUnique.mockResolvedValue({
+        id: 77,
+        userId: 1, // Chủ đơn là User 1
+        totalAmount: 50000,
+        status: OrderStatus.PENDING,
+      });
+
+      const req: any = { user: { userId: 2, email: 'hacker@brewlite.com', role: Role.CUSTOMER } };
+      await expect(
+        controller.confirmZaloPayOrder(req, 77, '261024_77_112233'),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('confirmZaloPayOrder cho phép ADMIN xác nhận dù không phải chủ đơn hàng', async () => {
+      mockPrisma.order.findUnique.mockResolvedValue({
+        id: 77,
+        userId: 1,
+        totalAmount: 50000,
+        status: OrderStatus.PENDING,
+      });
+
+      mockZaloPayService.createMockCallbackPayload = vi.fn().mockReturnValue({
+        data: JSON.stringify({
+          app_trans_id: '261024_77_112233',
+          amount: 50000,
+          zp_trans_id: 112233,
+          embed_data: JSON.stringify({ orderId: 77 }),
+        }),
+        mac: 'valid_mock_mac',
+      });
+      mockZaloPayService.verifyCallback.mockReturnValue(true);
+
+      const req: any = { user: { userId: 99, email: 'admin@brewlite.com', role: Role.ADMIN } };
+      const res = await controller.confirmZaloPayOrder(req, 77, '261024_77_112233');
+      expect(res.success).toBe(true);
+      expect(res.status).toBe(OrderStatus.PAID);
+    });
+
     it('cancelZaloPayOrder hủy giao dịch thành công', async () => {
       mockPrisma.order.findUnique.mockResolvedValue({
         id: 77,
@@ -236,7 +326,32 @@ describe('ZaloPay Integration — Service & Controller Endpoints', () => {
         status: OrderStatus.PENDING,
       });
 
-      const res = await controller.cancelZaloPayOrder(77);
+      const req: any = { user: { userId: 1, email: 'test@brewlite.com', role: Role.CUSTOMER } };
+      const res = await controller.cancelZaloPayOrder(req, 77);
+      expect(res.success).toBe(true);
+      expect(res.message).toContain('đã được hủy');
+    });
+
+    it('cancelZaloPayOrder ném ForbiddenException nếu không phải chủ đơn hàng và không phải admin', async () => {
+      mockPrisma.order.findUnique.mockResolvedValue({
+        id: 77,
+        userId: 1,
+        status: OrderStatus.PENDING,
+      });
+
+      const req: any = { user: { userId: 2, email: 'other@brewlite.com', role: Role.CUSTOMER } };
+      await expect(controller.cancelZaloPayOrder(req, 77)).rejects.toThrow(ForbiddenException);
+    });
+
+    it('cancelZaloPayOrder cho phép ADMIN hủy dù không phải chủ đơn hàng', async () => {
+      mockPrisma.order.findUnique.mockResolvedValue({
+        id: 77,
+        userId: 1,
+        status: OrderStatus.PENDING,
+      });
+
+      const req: any = { user: { userId: 99, email: 'admin@brewlite.com', role: Role.ADMIN } };
+      const res = await controller.cancelZaloPayOrder(req, 77);
       expect(res.success).toBe(true);
       expect(res.message).toContain('đã được hủy');
     });

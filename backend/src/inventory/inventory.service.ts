@@ -223,13 +223,27 @@ export class InventoryService {
       throw new NotFoundException(`Không tìm thấy nguyên vật liệu #${id}`);
     }
 
+    const count = await this.prisma.recipe.count({ where: { ingredientId: id } });
+    let toppingCount = 0;
+    if ((this.prisma as any).toppingRecipe?.count) {
+      toppingCount = await (this.prisma as any).toppingRecipe.count({
+        where: { ingredientId: id },
+      });
+    }
+
+    if (count > 0 || toppingCount > 0) {
+      throw new ConflictException(
+        'Không thể xóa nguyên liệu vì đang được sử dụng trong công thức món. Vui lòng gỡ khỏi công thức trước.',
+      );
+    }
+
     await this.prisma.ingredient.delete({ where: { id } });
 
     return {
       deleted: true,
       id,
       name: current.name,
-      removedRecipesCount: current.recipes?.length ?? 0,
+      removedRecipesCount: 0,
     };
   }
 

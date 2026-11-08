@@ -48,6 +48,8 @@ export class InventoryController {
   }
 
   /** GET /inventory/ingredients — Danh sách tồn kho nguyên vật liệu kèm đơn giá nhập */
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
   @Get('ingredients')
   getAllIngredients() {
     return this.inventoryService.getAllIngredients();
@@ -89,6 +91,8 @@ export class InventoryController {
   }
 
   /** GET /inventory/recipes — Bảng ma trận định lượng công thức BOM */
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
   @Get('recipes')
   getRecipeMatrix() {
     return this.inventoryService.getRecipeMatrix();
@@ -183,7 +187,7 @@ export class InventoryController {
 
   /** GET /inventory/dashboard — Thống kê quản trị (Yêu cầu ADMIN hoặc STAFF) */
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN, Role.STAFF)
+  @Roles(Role.ADMIN)
   @Get('dashboard')
   getDashboardStats() {
     return this.inventoryService.getDashboardStats();

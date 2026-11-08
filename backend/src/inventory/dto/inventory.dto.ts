@@ -1,5 +1,6 @@
 import {
   IsBoolean,
+  IsIn,
   IsInt,
   IsNotEmpty,
   IsNumber,
@@ -141,6 +142,9 @@ export class UpsertRecipeDto {
 
   @IsString()
   @IsNotEmpty()
+  @IsIn(['S', 'M', 'L', 'ALL'], {
+    message: 'Size công thức chỉ được là S, M, L hoặc ALL',
+  })
   size: string;
 
   @IsNumber()
@@ -151,6 +155,9 @@ export class UpsertRecipeDto {
 export class UpdateRecipeDto {
   @IsOptional()
   @IsString()
+  @IsIn(['S', 'M', 'L', 'ALL'], {
+    message: 'Size công thức chỉ được là S, M, L hoặc ALL',
+  })
   size?: string;
 
   @IsNumber()

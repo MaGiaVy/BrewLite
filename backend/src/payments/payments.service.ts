@@ -6,7 +6,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { OrderStatus, PaymentStatus, PaymentMethod } from '@prisma/client';
+import { OrderStatus, PaymentStatus, PaymentMethod, Role } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreatePaymentDto } from './dto/create-payment.dto.js';
 import { MockPaymentService } from './mock-payment.service.js';
@@ -110,137 +110,217 @@ export class PaymentsService {
     assertTransition(order.status, targetStatus);
 
     // 6. Thuc thi transaction trong Prisma de dam bao tinh toan ven (ACID)
-    return await this.prisma.$transaction(async (tx) => {
-      // Doc lai order trong transaction de co version hien tai
-      const currentOrder = await tx.order.findUnique({
-        where: { id: dto.orderId },
-      });
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        // Doc lai order trong transaction de co version hien tai
+        const currentOrder = await tx.order.findUnique({
+          where: { id: dto.orderId },
+        });
 
-      if (!currentOrder) {
-        throw new NotFoundException(`Khong tim thay don hang #${dto.orderId}`);
-      }
+        if (!currentOrder) {
+          throw new NotFoundException(`Khong tim thay don hang #${dto.orderId}`);
+        }
 
-      // Xac thuc lai state transition trong transaction
-      assertTransition(currentOrder.status, targetStatus);
+        // Xac thuc lai state transition trong transaction
+        assertTransition(currentOrder.status, targetStatus);
 
-      // Goi MockPaymentService
-      const mockResult = await this.mockPaymentService.processPayment({
-        amount: paymentAmount,
-        method: dto.method,
-        simulateFailure: dto.simulateFailure,
-      });
+        // Goi MockPaymentService
+        const mockResult = await this.mockPaymentService.processPayment({
+          amount: paymentAmount,
+          method: dto.method,
+          simulateFailure: dto.simulateFailure,
+        });
 
-      if (!mockResult.success) {
-        // Thanh toan that bai
+        if (!mockResult.success) {
+          // Thanh toan that bai
+
+          // Task 10: Optimistic Locking - chi update neu version khop
+          const failResult = await tx.order.updateMany({
+            where: {
+              id: currentOrder.id,
+              version: currentOrder.version,
+            },
+            data: {
+              status: OrderStatus.PAYMENT_FAILED,
+              version: { increment: 1 },
+            },
+          });
+
+          if (failResult.count === 0) {
+            throw new ConflictException(
+              `Don hang #${currentOrder.id} da bi thay doi boi mot request khac. Vui long thu lai.`,
+            );
+          }
+
+          let paymentRecord;
+          try {
+            paymentRecord = await tx.payment.create({
+              data: {
+                orderId: currentOrder.id,
+                amount: paymentAmount,
+                method: dto.method,
+                status: PaymentStatus.FAILED,
+                idempotencyKey: idempotencyKey || null,
+              },
+            });
+          } catch (err: any) {
+            if (err?.code === 'P2002' && idempotencyKey) {
+              const existingPayment = await this.prisma.payment.findUnique({
+                where: { idempotencyKey },
+                include: { order: true },
+              });
+              if (existingPayment) {
+                this.logger.log(
+                  `[Idempotency] Phat hien yeu cau trung lap P2002 voi key "${idempotencyKey}". Tra ve ket qua giao dich cu.`,
+                );
+                return {
+                  success: existingPayment.status === PaymentStatus.SUCCESS,
+                  paymentId: existingPayment.id,
+                  orderId: existingPayment.orderId,
+                  status: existingPayment.order?.status ?? OrderStatus.PAID,
+                  paymentStatus: existingPayment.status,
+                  amount: existingPayment.amount,
+                  method: existingPayment.method,
+                  isIdempotent: true,
+                  message: 'Giao dich da duoc xu ly truoc do thanh cong (Idempotent response)',
+                };
+              }
+            }
+            throw err;
+          }
+
+          this.logger.warn(
+            `[Payment Failed] Don hang #${currentOrder.id} thanh toan that bai. Ma Payment: #${paymentRecord.id}`,
+          );
+
+          return {
+            success: false,
+            paymentId: paymentRecord.id,
+            orderId: currentOrder.id,
+            status: OrderStatus.PAYMENT_FAILED,
+            paymentStatus: paymentRecord.status,
+            amount: paymentRecord.amount,
+            method: paymentRecord.method,
+            transactionId: mockResult.transactionId,
+            message: mockResult.message,
+          };
+        }
+
+        // Thanh toan thanh cong
 
         // Task 10: Optimistic Locking - chi update neu version khop
-        const failResult = await tx.order.updateMany({
+        const successResult = await tx.order.updateMany({
           where: {
             id: currentOrder.id,
             version: currentOrder.version,
           },
           data: {
-            status: OrderStatus.PAYMENT_FAILED,
+            status: OrderStatus.PAID,
             version: { increment: 1 },
           },
         });
 
-        if (failResult.count === 0) {
+        if (successResult.count === 0) {
           throw new ConflictException(
             `Don hang #${currentOrder.id} da bi thay doi boi mot request khac. Vui long thu lai.`,
           );
         }
 
-        const paymentRecord = await tx.payment.create({
-          data: {
-            orderId: currentOrder.id,
-            amount: paymentAmount,
-            method: dto.method,
-            status: PaymentStatus.FAILED,
-            idempotencyKey: idempotencyKey || null,
-          },
-        });
+        let paymentRecord;
+        try {
+          paymentRecord = await tx.payment.create({
+            data: {
+              orderId: currentOrder.id,
+              amount: paymentAmount,
+              method: dto.method,
+              status: PaymentStatus.SUCCESS,
+              idempotencyKey: idempotencyKey || null,
+            },
+          });
+        } catch (err: any) {
+          if (err?.code === 'P2002' && idempotencyKey) {
+            const existingPayment = await this.prisma.payment.findUnique({
+              where: { idempotencyKey },
+              include: { order: true },
+            });
+            if (existingPayment) {
+              this.logger.log(
+                `[Idempotency] Phat hien yeu cau trung lap P2002 voi key "${idempotencyKey}". Tra ve ket qua giao dich cu.`,
+              );
+              return {
+                success: existingPayment.status === PaymentStatus.SUCCESS,
+                paymentId: existingPayment.id,
+                orderId: existingPayment.orderId,
+                status: existingPayment.order?.status ?? OrderStatus.PAID,
+                paymentStatus: existingPayment.status,
+                amount: existingPayment.amount,
+                method: existingPayment.method,
+                isIdempotent: true,
+                message: 'Giao dich da duoc xu ly truoc do thanh cong (Idempotent response)',
+              };
+            }
+          }
+          throw err;
+        }
 
-        this.logger.warn(
-          `[Payment Failed] Don hang #${currentOrder.id} thanh toan that bai. Ma Payment: #${paymentRecord.id}`,
+        // Task 10: Loyalty Points - Cong Hat Vang cho user (1.000 VND = 1 diem)
+        const pointsEarned = Math.floor(paymentAmount / POINTS_PER_VND);
+
+        if (pointsEarned > 0 && currentOrder.userId) {
+          await tx.user.update({
+            where: { id: currentOrder.userId },
+            data: { loyaltyPoints: { increment: pointsEarned } },
+          });
+          this.logger.log(
+            `[Loyalty] Don #${currentOrder.id}: Cong ${pointsEarned} Hat Vang cho User #${currentOrder.userId}`,
+          );
+        }
+
+        this.logger.log(
+          `[Payment Success] Don hang #${currentOrder.id} thanh toan thanh cong. Ma Payment: #${paymentRecord.id}`,
         );
 
         return {
-          success: false,
+          success: true,
           paymentId: paymentRecord.id,
           orderId: currentOrder.id,
-          status: OrderStatus.PAYMENT_FAILED,
+          status: OrderStatus.PAID,
           paymentStatus: paymentRecord.status,
           amount: paymentRecord.amount,
           method: paymentRecord.method,
           transactionId: mockResult.transactionId,
-          message: mockResult.message,
+          pointsEarned,
+          message:
+            pointsEarned > 0
+              ? `Thanh toan thanh cong! Ban nhan duoc +${pointsEarned} Hat Vang BrewLite Club.`
+              : 'Thanh toan don hang thanh cong!',
         };
-      }
-
-      // Thanh toan thanh cong
-
-      // Task 10: Optimistic Locking - chi update neu version khop
-      const successResult = await tx.order.updateMany({
-        where: {
-          id: currentOrder.id,
-          version: currentOrder.version,
-        },
-        data: {
-          status: OrderStatus.PAID,
-          version: { increment: 1 },
-        },
       });
-
-      if (successResult.count === 0) {
-        throw new ConflictException(
-          `Don hang #${currentOrder.id} da bi thay doi boi mot request khac. Vui long thu lai.`,
-        );
-      }
-
-      const paymentRecord = await tx.payment.create({
-        data: {
-          orderId: currentOrder.id,
-          amount: paymentAmount,
-          method: dto.method,
-          status: PaymentStatus.SUCCESS,
-          idempotencyKey: idempotencyKey || null,
-        },
-      });
-
-      // Task 10: Loyalty Points - Cong Hat Vang cho user (1.000 VND = 1 diem)
-      const pointsEarned = Math.floor(paymentAmount / POINTS_PER_VND);
-
-      if (pointsEarned > 0 && currentOrder.userId) {
-        await tx.user.update({
-          where: { id: currentOrder.userId },
-          data: { loyaltyPoints: { increment: pointsEarned } },
+    } catch (err: any) {
+      if (err?.code === 'P2002' && idempotencyKey) {
+        const existingPayment = await this.prisma.payment.findUnique({
+          where: { idempotencyKey },
+          include: { order: true },
         });
-        this.logger.log(
-          `[Loyalty] Don #${currentOrder.id}: Cong ${pointsEarned} Hat Vang cho User #${currentOrder.userId}`,
-        );
+        if (existingPayment) {
+          this.logger.log(
+            `[Idempotency] Phat hien yeu cau trung lap P2002 sau rollback voi key "${idempotencyKey}". Tra ve ket qua giao dich cu.`,
+          );
+          return {
+            success: existingPayment.status === PaymentStatus.SUCCESS,
+            paymentId: existingPayment.id,
+            orderId: existingPayment.orderId,
+            status: existingPayment.order?.status ?? OrderStatus.PAID,
+            paymentStatus: existingPayment.status,
+            amount: existingPayment.amount,
+            method: existingPayment.method,
+            isIdempotent: true,
+            message: 'Giao dich da duoc xu ly truoc do thanh cong (Idempotent response)',
+          };
+        }
       }
-
-      this.logger.log(
-        `[Payment Success] Don hang #${currentOrder.id} thanh toan thanh cong. Ma Payment: #${paymentRecord.id}`,
-      );
-
-      return {
-        success: true,
-        paymentId: paymentRecord.id,
-        orderId: currentOrder.id,
-        status: OrderStatus.PAID,
-        paymentStatus: paymentRecord.status,
-        amount: paymentRecord.amount,
-        method: paymentRecord.method,
-        transactionId: mockResult.transactionId,
-        pointsEarned,
-        message:
-          pointsEarned > 0
-            ? `Thanh toan thanh cong! Ban nhan duoc +${pointsEarned} Hat Vang BrewLite Club.`
-            : 'Thanh toan don hang thanh cong!',
-      };
-    });
+      throw err;
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -330,6 +410,14 @@ export class PaymentsService {
         return { return_code: 1, return_message: 'success' };
       }
 
+      // Chống Replay Attack / Hồi sinh đơn đã bị hủy:
+      if (order.status === OrderStatus.CANCELLED) {
+        this.logger.warn(
+          `[ZaloPay Callback] Đơn hàng #${orderId} đã bị hủy hoặc hết hạn, từ chối cập nhật trạng thái PAID`,
+        );
+        return { return_code: 1, return_message: 'Đơn hàng đã hết hạn hoặc bị hủy' };
+      }
+
       // Cập nhật trạng thái PAID trong transaction
       await this.prisma.$transaction(async (tx) => {
         await tx.order.update({
@@ -399,6 +487,10 @@ export class PaymentsService {
 
         // ZaloPay returnCode === 1 nghĩa là đã nhận tiền thành công
         if (queryRes.returnCode === 1) {
+          if (queryRes.amount !== order.totalAmount) {
+            throw new BadRequestException('Số tiền thanh toán trên ZaloPay không khớp với tổng tiền đơn hàng');
+          }
+
           await this.prisma.$transaction(async (tx) => {
             const current = await tx.order.findUnique({ where: { id: orderId } });
             if (current && current.status === OrderStatus.PENDING) {
@@ -447,6 +539,9 @@ export class PaymentsService {
           message: queryRes.returnMessage,
         };
       } catch (err: any) {
+        if (err instanceof BadRequestException) {
+          throw err;
+        }
         this.logger.warn(`[ZaloPay Polling] Không thể tra cứu trạng thái ZaloPay: ${err.message}`);
       }
     }
@@ -462,7 +557,24 @@ export class PaymentsService {
   /**
    * Xác nhận thanh toán từ Cổng ZaloPay Sandbox Gateway (Sinh chữ ký HMAC Key2 chuẩn)
    */
-  async confirmZaloPaySandbox(orderId: number, appTransId?: string) {
+  async confirmZaloPaySandbox(
+    orderId: number,
+    userId?: number | string,
+    userRole?: Role | string,
+    appTransId?: string,
+  ) {
+    let effectiveUserId: number | undefined;
+    let effectiveRole: Role | string | undefined;
+    let effectiveAppTransId: string | undefined;
+
+    if (typeof userId === 'string') {
+      effectiveAppTransId = userId;
+    } else {
+      effectiveUserId = userId;
+      effectiveRole = userRole;
+      effectiveAppTransId = appTransId;
+    }
+
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
     });
@@ -470,7 +582,16 @@ export class PaymentsService {
       throw new NotFoundException(`Không tìm thấy đơn hàng #${orderId}`);
     }
 
-    const transId = appTransId || `261024_${orderId}_${Date.now()}`;
+    if (
+      effectiveUserId !== undefined &&
+      order.userId !== null &&
+      order.userId !== effectiveUserId &&
+      effectiveRole !== Role.ADMIN
+    ) {
+      throw new ForbiddenException('Bạn không có quyền xác nhận hoặc hủy thanh toán đơn hàng này');
+    }
+
+    const transId = effectiveAppTransId || `261024_${orderId}_${Date.now()}`;
     const payload = this.zaloPayService.createMockCallbackPayload(
       order.id,
       order.totalAmount,
@@ -491,13 +612,27 @@ export class PaymentsService {
   /**
    * Hủy thanh toán từ Cổng ZaloPay Sandbox Gateway
    */
-  async cancelZaloPaySandbox(orderId: number) {
+  async cancelZaloPaySandbox(
+    orderId: number,
+    userId?: number,
+    userRole?: Role | string,
+  ) {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
     });
     if (!order) {
       throw new NotFoundException(`Không tìm thấy đơn hàng #${orderId}`);
     }
+
+    if (
+      userId !== undefined &&
+      order.userId !== null &&
+      order.userId !== userId &&
+      userRole !== Role.ADMIN
+    ) {
+      throw new ForbiddenException('Bạn không có quyền xác nhận hoặc hủy thanh toán đơn hàng này');
+    }
+
     this.logger.log(`[ZaloPay Gateway] Người dùng đã hủy giao dịch trên Cổng ZaloPay cho đơn hàng #${orderId}`);
     return {
       success: true,

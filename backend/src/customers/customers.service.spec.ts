@@ -108,6 +108,7 @@ describe('CustomersService — Admin Customer Management API', () => {
         email: 'test@example.com',
         fullName: 'Nguyễn Văn A',
         phone: '0987654321',
+        role: Role.CUSTOMER,
         isActive: true,
         loyaltyPoints: 50,
         createdAt: new Date(),
@@ -125,6 +126,7 @@ describe('CustomersService — Admin Customer Management API', () => {
           email: true,
           fullName: true,
           phone: true,
+          role: true,
           isActive: true,
           loyaltyPoints: true,
           createdAt: true,
@@ -139,6 +141,18 @@ describe('CustomersService — Admin Customer Management API', () => {
       prisma.user.findUnique.mockResolvedValue(null);
 
       await expect(service.getCustomerById(999)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('ném NotFoundException nếu người dùng tồn tại nhưng không phải Role.CUSTOMER', async () => {
+      prisma.user.findUnique.mockResolvedValue({
+        id: 99,
+        email: 'admin@brewlite.vn',
+        role: Role.ADMIN,
+      });
+
+      await expect(service.getCustomerById(99)).rejects.toThrow(
         NotFoundException,
       );
     });
@@ -242,11 +256,25 @@ describe('CustomersService — Admin Customer Management API', () => {
       ).rejects.toThrow(NotFoundException);
     });
 
+    it('ném NotFoundException nếu cố cập nhật tài khoản không phải Role.CUSTOMER (Admin/Staff)', async () => {
+      prisma.user.findUnique.mockResolvedValue({
+        id: 1,
+        email: 'admin@brewlite.vn',
+        role: Role.ADMIN,
+      });
+
+      await expect(
+        service.updateCustomer(1, { fullName: 'Hacker Name' }),
+      ).rejects.toThrow(NotFoundException);
+      expect(prisma.user.update).not.toHaveBeenCalled();
+    });
+
     it('cập nhật thông tin khách hàng và hash lại mật khẩu mới nếu có', async () => {
       prisma.user.findUnique.mockResolvedValue({
         id: 5,
         email: 'customer5@example.com',
         fullName: 'Tên Cũ',
+        role: Role.CUSTOMER,
       });
 
       prisma.user.update.mockResolvedValue({
@@ -282,6 +310,7 @@ describe('CustomersService — Admin Customer Management API', () => {
       prisma.user.findUnique.mockResolvedValue({
         id: 5,
         email: 'customer5@example.com',
+        role: Role.CUSTOMER,
         loyaltyPoints: 100,
       });
 
@@ -321,10 +350,25 @@ describe('CustomersService — Admin Customer Management API', () => {
       );
     });
 
+    it('ném NotFoundException nếu tài khoản không phải Role.CUSTOMER', async () => {
+      prisma.user.findUnique.mockResolvedValue({
+        id: 2,
+        email: 'staff@example.com',
+        role: Role.STAFF,
+        isActive: true,
+      });
+
+      await expect(service.toggleCustomerStatus(2, false)).rejects.toThrow(
+        NotFoundException,
+      );
+      expect(prisma.user.update).not.toHaveBeenCalled();
+    });
+
     it('chuyển đổi trạng thái tài khoản thành công (isActive = false / true)', async () => {
       prisma.user.findUnique.mockResolvedValue({
         id: 3,
         email: 'active@example.com',
+        role: Role.CUSTOMER,
         isActive: true,
       });
 
@@ -358,10 +402,25 @@ describe('CustomersService — Admin Customer Management API', () => {
       );
     });
 
+    it('ném NotFoundException nếu tài khoản cần xóa không phải Role.CUSTOMER (bảo vệ Admin/Staff khỏi bị xóa qua API customer)', async () => {
+      prisma.user.findUnique.mockResolvedValue({
+        id: 1,
+        email: 'admin@brewlite.vn',
+        role: Role.ADMIN,
+      });
+
+      await expect(service.deleteCustomer(1)).rejects.toThrow(
+        NotFoundException,
+      );
+      expect(prisma.user.delete).not.toHaveBeenCalled();
+      expect(prisma.user.update).not.toHaveBeenCalled();
+    });
+
     it('xóa vĩnh viễn (Hard Delete) nếu khách hàng CHƯA có đơn hàng nào (ordersCount === 0)', async () => {
       prisma.user.findUnique.mockResolvedValue({
         id: 10,
         email: 'newuser@example.com',
+        role: Role.CUSTOMER,
       });
       prisma.order.count.mockResolvedValue(0);
       prisma.user.delete.mockResolvedValue({ id: 10 });
@@ -385,6 +444,7 @@ describe('CustomersService — Admin Customer Management API', () => {
       prisma.user.findUnique.mockResolvedValue({
         id: 20,
         email: 'loyaluser@example.com',
+        role: Role.CUSTOMER,
       });
       prisma.order.count.mockResolvedValue(7);
       prisma.user.update.mockResolvedValue({ id: 20, isActive: false });
