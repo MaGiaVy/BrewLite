@@ -57,6 +57,16 @@ export function extractUserFromRequest(
         if (expectedSignature === parts[2]) {
           const payloadJson = Buffer.from(parts[1], 'base64url').toString('utf8');
           const payload = JSON.parse(payloadJson);
+
+          // Bảo mật AUTH-EXP: Kiểm tra thời hạn hiệu lực của token (exp & nbf)
+          const nowInSeconds = Math.floor(Date.now() / 1000);
+          if (payload.exp && typeof payload.exp === 'number' && nowInSeconds > payload.exp) {
+            return null; // Token đã hết hạn, từ chối cấp quyền
+          }
+          if (payload.nbf && typeof payload.nbf === 'number' && nowInSeconds < payload.nbf) {
+            return null; // Token chưa đến thời điểm hiệu lực
+          }
+
           return {
             userId: payload.sub,
             email: payload.email,

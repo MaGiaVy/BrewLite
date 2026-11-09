@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
+import { ThrottlerModule, ThrottlerGuard, seconds } from '@nestjs/throttler';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
 import { ProductsModule } from './products/products.module.js';
@@ -12,6 +14,12 @@ import { CustomersModule } from './customers/customers.module.js';
 
 @Module({
   imports: [
+    ThrottlerModule.forRoot([
+      {
+        ttl: seconds(60),
+        limit: 120, // 120 requests / phút giới hạn chung cho hệ thống
+      },
+    ]),
     ProductsModule,
     PrismaModule,
     OrdersModule,
@@ -22,6 +30,12 @@ import { CustomersModule } from './customers/customers.module.js';
     CustomersModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    AppService,
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
+  ],
 })
 export class AppModule {}

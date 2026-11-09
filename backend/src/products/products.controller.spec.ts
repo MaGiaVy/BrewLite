@@ -1,7 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { vi, describe, beforeEach, it, expect } from 'vitest';
 import { Role } from '@prisma/client';
-import { ProductsController } from './products.controller.js';
+import * as crypto from 'node:crypto';
+import { getJwtSecret } from '../auth/jwt-secret.helper.js';
+import { ProductsController, extractUserFromRequest } from './products.controller.js';
 import { ProductsService } from './products.service.js';
 
 describe('ProductsController', () => {
@@ -95,6 +97,48 @@ describe('ProductsController', () => {
       controller.findOne(1, mockReq);
 
       expect(mockProductsService.findOne).toHaveBeenCalledWith(1, true);
+    });
+  });
+
+  describe('extractUserFromRequest — Kiểm tra thời hạn token (CRIT-03)', () => {
+    function createTestToken(payload: any): string {
+      const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
+      const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+      const secret = getJwtSecret();
+      const signature = crypto
+        .createHmac('sha256', secret)
+        .update(`${header}.${body}`)
+        .digest('base64url');
+      return `${header}.${body}.${signature}`;
+    }
+
+    it('từ chối token Admin đã hết hạn (exp trong quá khứ) và trả về null', () => {
+      const expiredPayload = {
+        sub: 1,
+        email: 'admin@brewlite.vn',
+        role: Role.ADMIN,
+        exp: Math.floor(Date.now() / 1000) - 3600, // Hết hạn 1 tiếng trước
+      };
+      const token = createTestToken(expiredPayload);
+      const req = { headers: { authorization: `Bearer ${token}` } };
+
+      const user = extractUserFromRequest(req);
+      expect(user).toBeNull();
+    });
+
+    it('chấp nhận token hợp lệ và còn hạn', () => {
+      const validPayload = {
+        sub: 2,
+        email: 'staff@brewlite.vn',
+        role: Role.STAFF,
+        exp: Math.floor(Date.now() / 1000) + 3600, // Còn hạn 1 tiếng
+      };
+      const token = createTestToken(validPayload);
+      const req = { headers: { authorization: `Bearer ${token}` } };
+
+      const user = extractUserFromRequest(req);
+      expect(user).not.toBeNull();
+      expect(user?.role).toBe(Role.STAFF);
     });
   });
 });

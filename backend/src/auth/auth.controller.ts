@@ -9,10 +9,12 @@ import {
   Request,
   UseGuards,
 } from '@nestjs/common';
+import { Throttle, seconds } from '@nestjs/throttler';
 import { AuthService } from './auth.service.js';
 import { RegisterDto } from './dto/register.dto.js';
 import { LoginDto } from './dto/login.dto.js';
 import { UpdateProfileDto } from './dto/update-profile.dto.js';
+import { RedeemPointsDto } from './dto/redeem-points.dto.js';
 import { JwtAuthGuard } from './jwt-auth.guard.js';
 
 interface AuthRequest extends Request {
@@ -23,13 +25,15 @@ interface AuthRequest extends Request {
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
-  /** POST /auth/register */
+  /** POST /auth/register — Giới hạn chống spam tạo tài khoản: tối đa 5 lần / phút */
+  @Throttle({ default: { limit: 5, ttl: seconds(60) } })
   @Post('register')
   register(@Body() dto: RegisterDto) {
     return this.authService.register(dto);
   }
 
-  /** POST /auth/login */
+  /** POST /auth/login — Giới hạn chống dò mật khẩu brute-force: tối đa 5 lần / phút */
+  @Throttle({ default: { limit: 5, ttl: seconds(60) } })
   @Post('login')
   @HttpCode(HttpStatus.OK)
   login(@Body() dto: LoginDto) {
@@ -58,24 +62,19 @@ export class AuthController {
 
   /**
    * POST /auth/redeem-points — Đổi điểm Hạt Vàng lấy Voucher / Quà tặng (trừ điểm & cộng dồn voucher)
-   * Yêu cầu JWT Bearer Token
+   * Yêu cầu JWT Bearer Token, kiểm tra chặt chẽ DTO chống điểm âm
    */
   @UseGuards(JwtAuthGuard)
   @Post('redeem-points')
   redeemPoints(
     @Request() req: AuthRequest,
-    @Body()
-    body: {
-      points: number;
-      voucherCode?: string;
-      description?: string;
-    },
+    @Body() dto: RedeemPointsDto,
   ) {
     return this.authService.redeemPoints(
       req.user.userId,
-      Number(body?.points || 0),
-      body?.description,
-      body?.voucherCode,
+      dto.points,
+      dto.description,
+      dto.voucherCode,
     );
   }
 
