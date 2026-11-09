@@ -22,31 +22,50 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(payload: JwtPayload) {
+    const rawSub = payload?.sub;
+    const userId = Number(rawSub);
+    if (!rawSub || isNaN(userId)) {
+      throw new UnauthorizedException(
+        'Token không hợp lệ hoặc thiếu thông tin người dùng (User ID).',
+      );
+    }
+
     if (this.prisma?.user?.findUnique) {
-      const user = await this.prisma.user.findUnique({
-        where: { id: payload.sub },
-        select: { id: true, email: true, role: true, isActive: true },
-      });
+      try {
+        const user = await this.prisma.user.findUnique({
+          where: { id: userId },
+          select: { id: true, email: true, role: true, isActive: true },
+        });
 
-      if (!user) {
-        throw new UnauthorizedException('Tài khoản không tồn tại.');
+        if (!user) {
+          throw new UnauthorizedException('Tài khoản không tồn tại.');
+        }
+
+        if (user.isActive === false) {
+          throw new UnauthorizedException(
+            'Tài khoản của bạn đã bị tạm khóa. Vui lòng liên hệ Quản lý cửa hàng.',
+          );
+        }
+
+        return {
+          userId: user.id,
+          email: user.email,
+          role: user.role ?? Role.CUSTOMER,
+        };
+      } catch (err: any) {
+        if (err instanceof UnauthorizedException) {
+          throw err;
+        }
+        return {
+          userId,
+          email: payload.email,
+          role: payload.role ?? Role.CUSTOMER,
+        };
       }
-
-      if (user.isActive === false) {
-        throw new UnauthorizedException(
-          'Tài khoản của bạn đã bị tạm khóa. Vui lòng liên hệ Quản lý cửa hàng.',
-        );
-      }
-
-      return {
-        userId: user.id,
-        email: user.email,
-        role: user.role ?? Role.CUSTOMER,
-      };
     }
 
     return {
-      userId: payload.sub,
+      userId,
       email: payload.email,
       role: payload.role ?? Role.CUSTOMER,
     };

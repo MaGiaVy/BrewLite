@@ -47,9 +47,16 @@ export class InventoryController {
     return this.inventoryService.updateGlobalSizePricing(dto);
   }
 
-  /** GET /inventory/ingredients — Danh sách tồn kho nguyên vật liệu kèm đơn giá nhập */
+  /** GET /inventory hoặc GET /inventory/ingredients — Danh sách tồn kho nguyên vật liệu kèm đơn giá nhập (ADMIN & STAFF) */
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN)
+  @Roles(Role.ADMIN, Role.STAFF)
+  @Get()
+  getInventoryRoot() {
+    return this.inventoryService.getAllIngredients();
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN, Role.STAFF)
   @Get('ingredients')
   getAllIngredients() {
     return this.inventoryService.getAllIngredients();
@@ -90,9 +97,9 @@ export class InventoryController {
     return this.inventoryService.getInventoryLogs();
   }
 
-  /** GET /inventory/recipes — Bảng ma trận định lượng công thức BOM */
+  /** GET /inventory/recipes — Bảng ma trận định lượng công thức BOM (ADMIN & STAFF) */
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN)
+  @Roles(Role.ADMIN, Role.STAFF)
   @Get('recipes')
   getRecipeMatrix() {
     return this.inventoryService.getRecipeMatrix();

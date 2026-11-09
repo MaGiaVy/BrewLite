@@ -210,13 +210,13 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
   }
 
   async createOrder(dto: CreateOrderDto, userId: number) {
-    // 0. Chống Spam đơn hàng ảo (Cart Hoarding DoS): Giới hạn tối đa 5 đơn PENDING đồng thời cho mỗi user
+    // 0. Chống Spam đơn hàng ảo (Cart Hoarding DoS): Giới hạn tối đa 5 đơn PENDING / PAYMENT_FAILED đồng thời cho mỗi user
     if (userId && this.prisma.order?.count) {
       const activePendingCount = await this.prisma.order
         .count({
           where: {
             userId,
-            status: OrderStatus.PENDING,
+            status: { in: [OrderStatus.PENDING, OrderStatus.PAYMENT_FAILED] },
           },
         })
         .catch(() => 0);
@@ -375,7 +375,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
                 where: {
                   userId,
                   discountCode: code,
-                  status: OrderStatus.PENDING,
+                  status: { in: [OrderStatus.PENDING, OrderStatus.PAYMENT_FAILED] },
                 },
               })
               .catch(() => 0);
@@ -397,6 +397,20 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
               maxDiscountCap = Number(personalVoucher.maxDiscountAmount);
             }
             matchedRate = Number(personalVoucher.discountPercent || 0) / 100;
+          } else {
+            // Chặn dùng chùa Voucher đổi thưởng (như BREW50 -50%) khi tài khoản chưa đổi từ điểm Hạt Vàng
+            const LOYALTY_VOUCHERS = [
+              'BREW50',
+              'BREW20',
+              'BREWCOZY',
+              'WELCOME20',
+              'BREW10',
+            ];
+            if (LOYALTY_VOUCHERS.includes(code)) {
+              throw new BadRequestException(
+                `Bạn chưa đổi mã giảm giá "${code}" từ điểm Hạt Vàng hoặc mã đã được sử dụng hết.`,
+              );
+            }
           }
         }
       }
@@ -988,8 +1002,12 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException('Chỉ có thể xóa các đơn hàng đã hủy hoặc chưa thanh toán.');
     }
 
-    // Nếu đơn PENDING bị xóa, hoàn lại nguyên vật liệu
-    if (order.status === OrderStatus.PENDING && this.prisma.$transaction) {
+    // Nếu đơn PENDING hoặc PAYMENT_FAILED bị xóa, hoàn lại nguyên vật liệu
+    if (
+      (order.status === OrderStatus.PENDING ||
+        order.status === OrderStatus.PAYMENT_FAILED) &&
+      this.prisma.$transaction
+    ) {
       return await this.prisma.$transaction(async (tx: any) => {
         if (tx.recipe && tx.ingredient && Array.isArray(order.items)) {
           const requiredIngredients = await this.computeRequiredIngredients(

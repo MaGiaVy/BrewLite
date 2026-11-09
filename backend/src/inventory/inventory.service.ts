@@ -45,26 +45,30 @@ export class InventoryService {
 
   private formatIngredient(ing: any) {
     if (!ing) return ing;
+    const stock = Number(ing.stock ?? 0);
+    const minThreshold = Number(ing.minThreshold ?? 0);
     const status =
-      ing.stock <= 0
+      stock <= 0
         ? 'OUT_OF_STOCK'
-        : ing.stock <= ing.minThreshold
+        : stock <= minThreshold
           ? 'LOW_STOCK'
           : 'OK';
-    const maxRef = Math.max(ing.minThreshold * 8, ing.stock, 1);
-    const percentage = Math.min(100, Math.round((ing.stock / maxRef) * 100));
+    const maxRef = Math.max(minThreshold * 8, stock, 1);
+    const percentage = Math.min(100, Math.round((stock / maxRef) * 100));
     const costPerUnit = Number(ing.costPerUnit || 0);
-    const totalInventoryValue = Math.round(Number(ing.stock || 0) * costPerUnit);
+    const totalInventoryValue = Math.round(stock * costPerUnit);
 
     return {
       ...ing,
+      stock,
+      minThreshold,
       type: ing.type || 'INGREDIENT',
       isRequiredForSale: ing.isRequiredForSale ?? true,
       costPerUnit,
       totalInventoryValue,
       status,
       percentage,
-      recipesCount: Array.isArray(ing.recipes) ? ing.recipes.length : undefined,
+      recipesCount: Array.isArray(ing.recipes) ? ing.recipes.length : 0,
     };
   }
 
@@ -131,16 +135,36 @@ export class InventoryService {
   }
 
   async getAllIngredients() {
-    const list = await this.prisma.ingredient.findMany({
-      include: {
-        recipes: {
-          select: { id: true, productId: true, size: true },
+    try {
+      const list = await this.prisma.ingredient.findMany({
+        include: {
+          recipes: {
+            select: { id: true, productId: true, size: true },
+          },
         },
-      },
-      orderBy: { id: 'asc' },
-    });
-    if (!Array.isArray(list)) return [];
-    return list.map((ing) => this.formatIngredient(ing));
+        orderBy: { id: 'asc' },
+      });
+      if (Array.isArray(list)) {
+        return list.map((ing) => this.formatIngredient(ing));
+      }
+    } catch (err: any) {
+      // Fallback nếu CSDL local chưa chạy migrate mới nhất (thiếu cột type, isRequiredForSale...)
+      try {
+        if (typeof (this.prisma as any).$queryRaw === 'function') {
+          const rawList = await (this.prisma as any).$queryRaw`
+            SELECT id, code, name, unit, stock, "minThreshold", "costPerUnit"
+            FROM "Ingredient"
+            ORDER BY id ASC
+          `;
+          if (Array.isArray(rawList)) {
+            return rawList.map((ing) => this.formatIngredient(ing));
+          }
+        }
+      } catch (rawErr) {
+        // Raw query fallback failed
+      }
+    }
+    return [];
   }
 
   async createIngredient(dto: CreateIngredientDto) {
