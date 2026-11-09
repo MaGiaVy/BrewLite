@@ -2344,6 +2344,24 @@ export default function AdminPortalPage() {
                     />
                   ))}
                 </div>
+              ) : filteredIngredients.length === 0 ? (
+                <div className="bg-white rounded-2xl p-10 border border-[#E6DDD5] text-center shadow-xs flex flex-col items-center justify-center gap-3">
+                  <div className="w-14 h-14 rounded-2xl bg-[#FAF6F0] flex items-center justify-center text-3xl">
+                    {inventoryTypeFilter === "PACKAGING" ? "🥤" : "📦"}
+                  </div>
+                  <div>
+                    <h4 className="font-headline font-bold text-base text-[#2C1E18]">
+                      {inventoryTypeFilter === "PACKAGING"
+                        ? "Chưa có mặt hàng Bao bì & Vật tư nào phù hợp"
+                        : "Không tìm thấy nguyên vật liệu nào"}
+                    </h4>
+                    <p className="text-xs text-[#7A6A5E] mt-1 max-w-md mx-auto">
+                      {inventoryTypeFilter === "PACKAGING"
+                        ? "Kho chưa có vật tư bao bì (ly, nắp, ống hút, túi). Bạn có thể bấm nút '+ Thêm nguyên vật liệu' ở góc trên để tạo mới."
+                        : "Vui lòng thử thay đổi từ khóa tìm kiếm hoặc bộ lọc trạng thái tồn kho."}
+                    </p>
+                  </div>
+                </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {filteredIngredients.map((ing) => {

@@ -31,6 +31,7 @@ export class ProductsService {
           imageUrl: product.imageUrl ?? null,
           description: product.description ?? null,
           isOutOfStock: true,
+          outOfStockSizes: ['S', 'M', 'L'],
           availableServings: 0,
           category: product.category,
         };
@@ -52,27 +53,70 @@ export class ProductsService {
       };
     }
 
-    const baseRecipes = product.recipes.filter(
-      (r: any) => r.size === 'S' || r.size === 'ALL',
+    const sizes = ['S', 'M', 'L'];
+    const outOfStockSizes: string[] = [];
+    const hasBeverageSizes = product.recipes.some((r: any) =>
+      ['S', 'M', 'L'].includes(r.size),
     );
-    const checkRecipes = baseRecipes.length > 0 ? baseRecipes : product.recipes;
+
+    if (hasBeverageSizes) {
+      for (const size of sizes) {
+        const sizeRecipes = product.recipes.filter(
+          (r: any) => (r.size === size || r.size === 'ALL') && r.amount > 0,
+        );
+        if (sizeRecipes.length === 0) continue;
+
+        const isSizeOut = sizeRecipes.some((r: any) => {
+          const isRequired = r.ingredient?.isRequiredForSale ?? true;
+          if (!isRequired) return false;
+          return (r.ingredient?.stock ?? 0) < r.amount;
+        });
+
+        if (isSizeOut) {
+          outOfStockSizes.push(size);
+        }
+      }
+    }
 
     let minServings = Infinity;
     let ingredientOutOfStock = false;
 
-    for (const r of checkRecipes) {
-      if (r.ingredient && r.amount > 0) {
-        const isRequired = r.ingredient.isRequiredForSale ?? true;
-        if (!isRequired) {
-          continue;
+    if (hasBeverageSizes) {
+      const activeSizes = sizes.filter((s) =>
+        product.recipes.some((r: any) => r.size === s),
+      );
+      // Món chỉ coi là hết hàng hoàn toàn khi TẤT CẢ các size đều đã hết hàng
+      ingredientOutOfStock =
+        activeSizes.length > 0 &&
+        activeSizes.every((s) => outOfStockSizes.includes(s));
+
+      for (const r of product.recipes) {
+        if (r.ingredient && r.amount > 0) {
+          const isRequired = r.ingredient.isRequiredForSale ?? true;
+          if (!isRequired) continue;
+          const possible = Math.floor(r.ingredient.stock / r.amount);
+          if (possible < minServings) {
+            minServings = possible;
+          }
         }
-        const possible = Math.floor(r.ingredient.stock / r.amount);
-        if (possible < minServings) {
-          minServings = possible;
+      }
+    } else {
+      // Món không có size (bánh ngọt)
+      for (const r of product.recipes) {
+        if (r.ingredient && r.amount > 0) {
+          const isRequired = r.ingredient.isRequiredForSale ?? true;
+          if (!isRequired) continue;
+          const possible = Math.floor(r.ingredient.stock / r.amount);
+          if (possible < minServings) {
+            minServings = possible;
+          }
+          if (r.ingredient.stock < r.amount) {
+            ingredientOutOfStock = true;
+          }
         }
-        if (r.ingredient.stock < r.amount) {
-          ingredientOutOfStock = true;
-        }
+      }
+      if (ingredientOutOfStock) {
+        outOfStockSizes.push('ALL');
       }
     }
 
@@ -89,6 +133,7 @@ export class ProductsService {
         imageUrl: product.imageUrl ?? null,
         description: product.description ?? null,
         isOutOfStock: manualSoldOut || ingredientOutOfStock,
+        outOfStockSizes,
         availableServings: manualSoldOut ? 0 : computedServings,
         category: product.category,
       };
@@ -120,6 +165,7 @@ export class ProductsService {
       ...product,
       isOutOfStock: manualSoldOut || ingredientOutOfStock,
       ingredientOutOfStock,
+      outOfStockSizes,
       availableServings: manualSoldOut ? 0 : computedServings,
       recipesCount: product.recipes.length,
       orderItemsCount: orderCountMap

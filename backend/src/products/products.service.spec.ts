@@ -210,6 +210,7 @@ describe('ProductsService — Admin Menu CRUD & Visibility Management', () => {
         imageUrl: '/images/products/ca-phe-den.png',
         description: 'Cà phê đậm đà',
         isOutOfStock: false,
+        outOfStockSizes: [],
         availableServings: 20,
         category: 'vietnamese',
       });
@@ -283,6 +284,57 @@ describe('ProductsService — Admin Menu CRUD & Visibility Management', () => {
       expect(adminItem.recipes).toBeDefined();
       expect(adminItem.cogsSizeS).toBe(5000);
       expect(adminItem.grossProfitS).toBe(40000);
+    });
+ 
+    it('trả về outOfStockSizes chính xác khi chỉ hết ly size M, không khóa toàn bộ món', async () => {
+      mockPrisma.product.findUnique.mockResolvedValue({
+        id: 1,
+        name: 'Cà phê Đen',
+        basePrice: 25000,
+        sizeUpchargeM: 5000,
+        sizeUpchargeL: 10000,
+        imageUrl: '/images/products/ca-phe-den.png',
+        description: 'Cà phê đậm đà',
+        category: 'vietnamese',
+        isActive: true,
+        isSoldOutManual: false,
+        recipes: [
+          // Size S còn ly
+          { id: 1, size: 'S', amount: 1, ingredient: { code: 'PKG_CUP_S', stock: 50, isRequiredForSale: true } },
+          // Size M hết ly
+          { id: 2, size: 'M', amount: 1, ingredient: { code: 'PKG_CUP_M', stock: 0, isRequiredForSale: true } },
+          // Size L còn ly
+          { id: 3, size: 'L', amount: 1, ingredient: { code: 'PKG_CUP_L', stock: 30, isRequiredForSale: true } },
+        ],
+      });
+
+      const res = await service.findOne(1, false);
+      expect(res.outOfStockSizes).toEqual(['M']);
+      expect(res.isOutOfStock).toBe(false); // Vẫn bán được Size S và L
+    });
+
+    it('khóa toàn bộ món (isOutOfStock = true) khi toàn bộ các size đều hết hàng', async () => {
+      mockPrisma.product.findUnique.mockResolvedValue({
+        id: 1,
+        name: 'Cà phê Đen',
+        basePrice: 25000,
+        sizeUpchargeM: 5000,
+        sizeUpchargeL: 10000,
+        imageUrl: '/images/products/ca-phe-den.png',
+        description: 'Cà phê đậm đà',
+        category: 'vietnamese',
+        isActive: true,
+        isSoldOutManual: false,
+        recipes: [
+          { id: 1, size: 'S', amount: 1, ingredient: { code: 'PKG_CUP_S', stock: 0, isRequiredForSale: true } },
+          { id: 2, size: 'M', amount: 1, ingredient: { code: 'PKG_CUP_M', stock: 0, isRequiredForSale: true } },
+          { id: 3, size: 'L', amount: 1, ingredient: { code: 'PKG_CUP_L', stock: 0, isRequiredForSale: true } },
+        ],
+      });
+
+      const res = await service.findOne(1, false);
+      expect(res.outOfStockSizes).toEqual(['S', 'M', 'L']);
+      expect(res.isOutOfStock).toBe(true);
     });
   });
 });

@@ -795,6 +795,126 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
 
       expect(mockTx.order.create).not.toHaveBeenCalled();
     });
+
+    it('tính toán và trừ kho thông minh các bao bì vật tư phụ trợ (Ống hút Boba/Bio, Túi đôi/Túi đơn, Khăn, Muỗng)', async () => {
+      const packagingItems = [
+        { id: 284, code: 'PKG_CUP_M', name: 'Ly Kraft M', unit: 'chiếc', stock: 100, isRequiredForSale: true, version: 1 },
+        { id: 288, code: 'PKG_LID_FLAT', name: 'Nắp phẳng', unit: 'cái', stock: 100, isRequiredForSale: true, version: 1 },
+        { id: 290, code: 'PKG_STRAW_BIO', name: 'Ống hút Bio', unit: 'ống', stock: 100, isRequiredForSale: false, version: 1 },
+        { id: 291, code: 'PKG_STRAW_BOBA', name: 'Ống hút Boba', unit: 'ống', stock: 100, isRequiredForSale: false, version: 1 },
+        { id: 292, code: 'PKG_BAG_T', name: 'Túi chữ T', unit: 'chiếc', stock: 100, isRequiredForSale: false, version: 1 },
+        { id: 293, code: 'PKG_BAG_2CUP', name: 'Túi 2 ly', unit: 'chiếc', stock: 100, isRequiredForSale: false, version: 1 },
+        { id: 294, code: 'PKG_TISSUE', name: 'Khăn giấy', unit: 'tờ', stock: 100, isRequiredForSale: false, version: 1 },
+        { id: 295, code: 'PKG_SPOON', name: 'Muỗng', unit: 'cái', stock: 100, isRequiredForSale: false, version: 1 },
+      ];
+
+      const mockTx = {
+        recipe: {
+          findMany: vi.fn().mockResolvedValue([
+            { productId: 1, size: 'M', amount: 1, ingredient: packagingItems[0] },
+            { productId: 1, size: 'M', amount: 1, ingredient: packagingItems[1] },
+            { productId: 8, size: 'ALL', amount: 1, ingredient: { id: 13, code: 'ING_PAIN', name: 'Bánh Pain', unit: 'chiếc', stock: 20, isRequiredForSale: true, version: 1 } },
+          ]),
+        },
+        toppingRecipe: {
+          findMany: vi.fn().mockResolvedValue([]),
+        },
+        product: {
+          findMany: vi.fn().mockResolvedValue([
+            { id: 1, category: 'vietnamese' },
+            { id: 8, category: 'bakery' },
+          ]),
+        },
+        ingredient: {
+          findMany: vi.fn().mockResolvedValue(packagingItems.slice(2)),
+          findUnique: vi.fn().mockImplementation(({ where }: { where: { id: number } }) => {
+            const found = packagingItems.find((p) => p.id === where.id);
+            if (found) return Promise.resolve(found);
+            if (where.id === 13) return Promise.resolve({ id: 13, code: 'ING_PAIN', name: 'Bánh Pain', unit: 'chiếc', stock: 20, isRequiredForSale: true, version: 1 });
+            return Promise.resolve(null);
+          }),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+        order: {
+          create: vi.fn().mockResolvedValue({
+            id: 888,
+            status: OrderStatus.PENDING,
+            totalAmount: 150000,
+            items: [],
+          }),
+        },
+      };
+
+      prisma.$transaction.mockImplementation(async (cb: any) => cb(mockTx));
+
+      await service.createOrder(
+        {
+          items: [
+            { productId: 1, productName: 'Cà phê Đen', size: 'M', toppings: [], quantity: 2, unitPrice: 29000 },
+            { productId: 1, productName: 'Cà phê Đen', size: 'M', toppings: ['Trân châu trắng'], quantity: 1, unitPrice: 37000 },
+            { productId: 8, productName: 'Bánh Pain', size: 'ALL', toppings: [], quantity: 1, unitPrice: 39000 },
+          ],
+        },
+        1,
+      );
+
+      // Ly M: 3
+      expect(mockTx.ingredient.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ id: 284 }),
+          data: expect.objectContaining({ stock: { decrement: 3 } }),
+        }),
+      );
+      // Nắp phẳng: 3
+      expect(mockTx.ingredient.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ id: 288 }),
+          data: expect.objectContaining({ stock: { decrement: 3 } }),
+        }),
+      );
+      // Ống hút bio: 2
+      expect(mockTx.ingredient.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ id: 290 }),
+          data: expect.objectContaining({ stock: { decrement: 2 } }),
+        }),
+      );
+      // Ống hút boba: 1
+      expect(mockTx.ingredient.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ id: 291 }),
+          data: expect.objectContaining({ stock: { decrement: 1 } }),
+        }),
+      );
+      // Túi 2 ly: 1
+      expect(mockTx.ingredient.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ id: 293 }),
+          data: expect.objectContaining({ stock: { decrement: 1 } }),
+        }),
+      );
+      // Túi chữ T: 1
+      expect(mockTx.ingredient.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ id: 292 }),
+          data: expect.objectContaining({ stock: { decrement: 1 } }),
+        }),
+      );
+      // Khăn giấy: 3
+      expect(mockTx.ingredient.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ id: 294 }),
+          data: expect.objectContaining({ stock: { decrement: 3 } }),
+        }),
+      );
+      // Muỗng: 1
+      expect(mockTx.ingredient.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ id: 295 }),
+          data: expect.objectContaining({ stock: { decrement: 1 } }),
+        }),
+      );
+    });
   });
 
   describe('createOrder & Discount Codes (Voucher)', () => {

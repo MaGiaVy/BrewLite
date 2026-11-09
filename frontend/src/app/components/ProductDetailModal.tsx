@@ -133,6 +133,9 @@ export default function ProductDetailModal({
 }: ProductDetailModalProps) {
   // State for customization options
   const isBakery = useMemo(() => isBakeryProduct(product), [product]);
+  const isCurrentSizeOutOfStock = !isBakery && Boolean(
+    (product as any)?.outOfStockSizes?.includes(selectedSize)
+  );
   const [availableToppings, setAvailableToppings] = useState<ToppingItem[]>(AVAILABLE_TOPPINGS);
   const [availableBakeryToppings, setAvailableBakeryToppings] = useState<ToppingItem[]>(AVAILABLE_BAKERY_TOPPINGS);
   const [bakeryServingStyles, setBakeryServingStyles] = useState<Array<{ id: string; name: string; desc: string; icon: string }>>([
@@ -224,7 +227,11 @@ export default function ProductDetailModal({
         setQuantity(initialCustomization.quantity || 1);
         setShowToast(false);
       } else {
-        setSelectedSize("M");
+        const outSizes: string[] = (product as any)?.outOfStockSizes || [];
+        const availableSizes: Array<"S" | "M" | "L"> = (["M", "S", "L"] as const).filter(
+          (s) => !outSizes.includes(s)
+        );
+        setSelectedSize(availableSizes[0] || "M");
         if (isBakery) {
           const n = (product.name || "").toLowerCase();
           if (
@@ -820,49 +827,77 @@ export default function ProductDetailModal({
                     {(["S", "M", "L"] as const).map((sizeKey) => {
                       const cfg = sizeConfig[sizeKey];
                       const isSelected = selectedSize === sizeKey;
+                      const isSizeOutOfStock = Boolean(
+                        (product as any)?.outOfStockSizes?.includes(sizeKey)
+                      );
 
                       return (
                         <button
                           key={sizeKey}
                           type="button"
-                          onClick={() => setSelectedSize(sizeKey)}
-                          className={`flex flex-col p-3.5 rounded-2xl transition-all text-left relative cursor-pointer ${isSelected
-                            ? "bg-[#2c1810] text-white shadow-md ring-2 ring-[#2c1810]"
-                            : "bg-[#f8f2ee] hover:bg-[#f3ede9] text-[#1d1b19] border border-[#2c1810]/10"
-                            }`}
+                          disabled={isSizeOutOfStock}
+                          onClick={() => !isSizeOutOfStock && setSelectedSize(sizeKey)}
+                          className={`flex flex-col p-3.5 rounded-2xl transition-all text-left relative ${
+                            isSizeOutOfStock
+                              ? "opacity-50 cursor-not-allowed bg-[#EFEAE6] border border-[#DDD5CE]"
+                              : isSelected
+                              ? "bg-[#2c1810] text-white shadow-md ring-2 ring-[#2c1810] cursor-pointer"
+                              : "bg-[#f8f2ee] hover:bg-[#f3ede9] text-[#1d1b19] border border-[#2c1810]/10 cursor-pointer"
+                          }`}
                         >
                           <div className="flex items-center justify-between w-full mb-1">
                             <span
-                              className={`material-symbols-outlined text-xl ${isSelected ? "text-[#febc85]" : "text-[#2c1810]"
-                                }`}
+                              className={`material-symbols-outlined text-xl ${
+                                isSizeOutOfStock
+                                  ? "text-[#A3968F]"
+                                  : isSelected
+                                  ? "text-[#febc85]"
+                                  : "text-[#2c1810]"
+                              }`}
                             >
-                              {cfg.icon}
+                              {isSizeOutOfStock ? "block" : cfg.icon}
                             </span>
                             <span
-                              className={`text-[11px] px-2 py-0.5 rounded-full font-bold ${isSelected
-                                ? "bg-white/20 text-white"
-                                : "bg-[#ede7e3] text-[#2c1810]"
-                                }`}
+                              className={`text-[11px] px-2 py-0.5 rounded-full font-bold ${
+                                isSizeOutOfStock
+                                  ? "bg-red-100 text-red-600 font-extrabold"
+                                  : isSelected
+                                  ? "bg-white/20 text-white"
+                                  : "bg-[#ede7e3] text-[#2c1810]"
+                              }`}
                             >
-                              {cfg.badgeText}
+                              {isSizeOutOfStock ? "Hết ly" : cfg.badgeText}
                             </span>
                           </div>
 
                           <span
-                            className={`text-[13px] font-bold ${isSelected ? "text-white" : "text-[#1d1b19]"
-                              }`}
+                            className={`text-[13px] font-bold ${
+                              isSizeOutOfStock
+                                ? "text-[#7A6A5E] line-through"
+                                : isSelected
+                                ? "text-white"
+                                : "text-[#1d1b19]"
+                            }`}
                           >
                             {cfg.label}
                           </span>
 
                           <span
-                            className={`text-[11px] mt-0.5 ${isSelected ? "text-[#febc85] font-semibold" : "text-[#827470]"
-                              }`}
+                            className={`text-[11px] mt-0.5 ${
+                              isSizeOutOfStock
+                                ? "text-red-500 font-bold"
+                                : isSelected
+                                ? "text-[#febc85] font-semibold"
+                                : "text-[#827470]"
+                            }`}
                           >
-                            {cfg.extra === 0
+                            {isSizeOutOfStock
+                              ? "Tạm hết size"
+                              : cfg.extra === 0
                               ? "+0đ (Gốc)"
-                              : `+${cfg.extra.toLocaleString("vi-VN")}đ${cfg.popular ? " (Phổ biến)" : ""
-                              }`}
+                              : `+${cfg.extra.toLocaleString("vi-VN")}đ${
+                                  cfg.popular ? " (Phổ biến)" : ""
+                                }`}
                           </span>
                         </button>
                       );
@@ -1161,17 +1196,34 @@ export default function ProductDetailModal({
             {/* Dynamic CTA Button */}
             <button
               type="button"
+              disabled={isCurrentSizeOutOfStock || product?.isOutOfStock}
               onClick={handleAddToCartClick}
-              className="flex-1 md:flex-initial flex items-center justify-center gap-2 bg-[#2c1810] hover:bg-[#351300] text-white px-6 md:px-8 py-3.5 rounded-2xl font-body font-bold text-[14px] transition-all shadow-md active:scale-[0.98] cursor-pointer group"
+              className={`flex-1 md:flex-initial flex items-center justify-center gap-2 px-6 md:px-8 py-3.5 rounded-2xl font-body font-bold text-[14px] transition-all shadow-md group ${
+                isCurrentSizeOutOfStock || product?.isOutOfStock
+                  ? "bg-[#C4B7AE] text-white cursor-not-allowed opacity-75"
+                  : "bg-[#2c1810] hover:bg-[#351300] text-white active:scale-[0.98] cursor-pointer"
+              }`}
               id="add-to-cart-btn"
             >
               <span className="material-symbols-outlined text-xl group-hover:rotate-12 transition-transform">
-                {actionLabel ? "edit_note" : "shopping_bag"}
+                {isCurrentSizeOutOfStock || product?.isOutOfStock
+                  ? "block"
+                  : actionLabel
+                  ? "edit_note"
+                  : "shopping_bag"}
               </span>
-              <span>{`${actionLabel || "Thêm vào giỏ hàng"} • `}</span>
-              <span className="text-[#febc85] font-extrabold">
-                {totalPrice.toLocaleString("vi-VN")}đ
+              <span>
+                {isCurrentSizeOutOfStock
+                  ? `Size ${selectedSize} Tạm Hết Hàng`
+                  : product?.isOutOfStock
+                  ? "Món Tạm Hết Hàng"
+                  : `${actionLabel || "Thêm vào giỏ hàng"} • `}
               </span>
+              {!isCurrentSizeOutOfStock && !product?.isOutOfStock && (
+                <span className="text-[#febc85] font-extrabold">
+                  {totalPrice.toLocaleString("vi-VN")}đ
+                </span>
+              )}
             </button>
           </div>
         </div>

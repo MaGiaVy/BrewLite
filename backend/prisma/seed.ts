@@ -302,6 +302,117 @@ async function main() {
       minThreshold: 200,
       costPerUnit: 120, // 120đ / 1 ml (30ml = 3.600đ chi phí)
     },
+    // ─── 4. BAO BÌ & VẬT TƯ TIÊU HAO (PACKAGING & CONSUMABLES) ───────────────
+    {
+      code: 'PKG_CUP_S',
+      name: 'Ly giấy Kraft Size S (360ml)',
+      unit: 'chiếc',
+      stock: 500,
+      minThreshold: 100,
+      costPerUnit: 750,
+      type: 'PACKAGING',
+      isRequiredForSale: true,
+    },
+    {
+      code: 'PKG_CUP_M',
+      name: 'Ly giấy Kraft Size M (500ml)',
+      unit: 'chiếc',
+      stock: 800,
+      minThreshold: 150,
+      costPerUnit: 850,
+      type: 'PACKAGING',
+      isRequiredForSale: true,
+    },
+    {
+      code: 'PKG_CUP_L',
+      name: 'Ly giấy Kraft Size L (700ml)',
+      unit: 'chiếc',
+      stock: 600,
+      minThreshold: 100,
+      costPerUnit: 950,
+      type: 'PACKAGING',
+      isRequiredForSale: true,
+    },
+    {
+      code: 'PKG_LID_FLAT',
+      name: 'Nắp bằng PET phi 90 (dùng cho Ly S/M/L)',
+      unit: 'cái',
+      stock: 1500,
+      minThreshold: 300,
+      costPerUnit: 220,
+      type: 'PACKAGING',
+      isRequiredForSale: true,
+    },
+    {
+      code: 'PKG_LID_DOME',
+      name: 'Nắp cầu phi 90 (cho Freeze đá xay / Macchiato)',
+      unit: 'cái',
+      stock: 800,
+      minThreshold: 150,
+      costPerUnit: 260,
+      type: 'PACKAGING',
+      isRequiredForSale: true,
+    },
+    {
+      code: 'PKG_STRAW_BIO',
+      name: 'Ống hút gạo tự hủy phi 6 (uống cà phê, trà)',
+      unit: 'ống',
+      stock: 2000,
+      minThreshold: 400,
+      costPerUnit: 130,
+      type: 'PACKAGING',
+      isRequiredForSale: false,
+    },
+    {
+      code: 'PKG_STRAW_BOBA',
+      name: 'Ống hút bọc giấy phi 12 (hút trân châu/thạch)',
+      unit: 'ống',
+      stock: 1000,
+      minThreshold: 200,
+      costPerUnit: 180,
+      type: 'PACKAGING',
+      isRequiredForSale: false,
+    },
+    {
+      code: 'PKG_BAG_T',
+      name: 'Túi quai chữ T tự hủy (xách 1 ly mang đi)',
+      unit: 'chiếc',
+      stock: 1200,
+      minThreshold: 250,
+      costPerUnit: 90,
+      type: 'PACKAGING',
+      isRequiredForSale: false,
+    },
+    {
+      code: 'PKG_BAG_2CUP',
+      name: 'Túi xách 2 quai đựng 2 ly mang đi',
+      unit: 'chiếc',
+      stock: 800,
+      minThreshold: 150,
+      costPerUnit: 160,
+      type: 'PACKAGING',
+      isRequiredForSale: false,
+    },
+    {
+      code: 'PKG_TISSUE',
+      name: 'Khăn giấy ăn lụa in logo BrewLite',
+      unit: 'tờ',
+      stock: 3000,
+      minThreshold: 500,
+      costPerUnit: 45,
+      type: 'PACKAGING',
+      isRequiredForSale: false,
+    },
+    {
+      code: 'PKG_SPOON',
+      name: 'Muỗng nhựa nâu ngắn múc bánh & topping',
+      unit: 'cái',
+      stock: 600,
+      minThreshold: 100,
+      costPerUnit: 110,
+      type: 'PACKAGING',
+      isRequiredForSale: false,
+    },
   ];
 
   console.log('Seeding ingredients...');
@@ -409,31 +520,50 @@ async function main() {
     { productId: 10, ingCode: 'ING_TIRAMISU', size: 'ALL', amount: 1 },
   ];
 
-  console.log('Seeding product recipes...');
+  // ─── 3.1 SEED PACKAGING RECIPES (ĐỊNH LƯỢNG LY & NẮP CHO TẤT CẢ ĐỒ UỐNG) ───
+  const beverageProductIds = [1, 2, 3, 4, 5, 6, 7, 11];
+  const packagingRecipesData: Array<{
+    productId: number;
+    ingCode: string;
+    size: string;
+    amount: number;
+  }> = [];
+
+  for (const pid of beverageProductIds) {
+    const lidCode = pid === 5 ? 'PKG_LID_DOME' : 'PKG_LID_FLAT';
+    packagingRecipesData.push(
+      { productId: pid, ingCode: 'PKG_CUP_S', size: 'S', amount: 1 },
+      { productId: pid, ingCode: lidCode, size: 'S', amount: 1 },
+      { productId: pid, ingCode: 'PKG_CUP_M', size: 'M', amount: 1 },
+      { productId: pid, ingCode: lidCode, size: 'M', amount: 1 },
+      { productId: pid, ingCode: 'PKG_CUP_L', size: 'L', amount: 1 },
+      { productId: pid, ingCode: lidCode, size: 'L', amount: 1 },
+    );
+  }
+
+  console.log('Seeding product & packaging recipes...');
   const existingProductsList = await prisma.product.findMany({ select: { id: true } });
   const existingProductIdSet = new Set(existingProductsList.map((p) => p.id));
-  const existingRecipeCount = await prisma.recipe.count();
-  if (existingRecipeCount === 0) {
-    for (const r of recipesData) {
-      const ingredientId = ingMap[r.ingCode];
-      if (!ingredientId || !existingProductIdSet.has(r.productId)) continue;
-      await prisma.recipe.upsert({
-        where: {
-          productId_ingredientId_size: {
-            productId: r.productId,
-            ingredientId,
-            size: r.size,
-          },
-        },
-        update: { amount: r.amount },
-        create: {
+  const allRecipesToSeed = [...recipesData, ...packagingRecipesData];
+  for (const r of allRecipesToSeed) {
+    const ingredientId = ingMap[r.ingCode];
+    if (!ingredientId || !existingProductIdSet.has(r.productId)) continue;
+    await prisma.recipe.upsert({
+      where: {
+        productId_ingredientId_size: {
           productId: r.productId,
           ingredientId,
           size: r.size,
-          amount: r.amount,
         },
-      });
-    }
+      },
+      update: { amount: r.amount },
+      create: {
+        productId: r.productId,
+        ingredientId,
+        size: r.size,
+        amount: r.amount,
+      },
+    });
   }
 
   // ─── 4. SEED TOPPING RECIPES (4 LOẠI TOPPING KÈM GIÁ BÁN & MÔ TẢ) ───────────
