@@ -18,6 +18,7 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
       findUnique: ReturnType<typeof vi.fn>;
       create: ReturnType<typeof vi.fn>;
       update: ReturnType<typeof vi.fn>;
+      count: ReturnType<typeof vi.fn>;
     };
     product: {
       findMany: ReturnType<typeof vi.fn>;
@@ -36,6 +37,7 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
         findUnique: vi.fn(),
         create: vi.fn(),
         update: vi.fn(),
+        count: vi.fn().mockResolvedValue(0),
       },
       product: {
         findMany: vi.fn().mockResolvedValue([
@@ -345,6 +347,107 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
       });
       // Đơn PENDING chưa thanh toán nên không thu hồi điểm loyalty
       expect(mockTx.user.update).not.toHaveBeenCalled();
+    });
+
+    it('[INV-01] ném ConflictException và không hoàn kho nếu phát hiện Race Condition khi hủy đơn song song (casResult.count === 0)', async () => {
+      prisma.order.findUnique.mockResolvedValue({
+        id: 115,
+        userId: 1,
+        status: OrderStatus.PENDING,
+        totalAmount: 50000,
+        items: [
+          {
+            productId: 4,
+            productName: 'Cà phê Muối',
+            size: 'M',
+            toppings: [],
+            quantity: 1,
+            unitPrice: 50000,
+          },
+        ],
+      });
+
+      const mockTx = {
+        recipe: { findMany: vi.fn().mockResolvedValue([]) },
+        toppingRecipe: { findMany: vi.fn().mockResolvedValue([]) },
+        ingredient: { update: vi.fn() },
+        user: { update: vi.fn() },
+        order: {
+          updateMany: vi.fn().mockResolvedValue({ count: 0 }), // Bị cạnh tranh bởi cron/request khác
+        },
+      };
+
+      prisma.$transaction.mockImplementation(async (cb) => cb(mockTx));
+
+      await expect(
+        service.updateOrderStatus(115, OrderStatus.CANCELLED, 1, Role.CUSTOMER),
+      ).rejects.toThrow(ConflictException);
+
+      // Tuyệt đối không cộng kho 2 lần
+      expect(mockTx.ingredient.update).not.toHaveBeenCalled();
+    });
+
+    it('[INV-02] cancelExpiredPendingOrders quét và tự động hủy cả đơn PENDING lẫn PAYMENT_FAILED quá 5 phút để giải phóng kho', async () => {
+      prisma.order.findMany.mockResolvedValue([
+        {
+          id: 201,
+          status: OrderStatus.PENDING,
+          createdAt: new Date(Date.now() - 6 * 60 * 1000),
+          items: [
+            {
+              productId: 4,
+              size: 'M',
+              toppings: [],
+              quantity: 1,
+            },
+          ],
+        },
+        {
+          id: 202,
+          status: OrderStatus.PAYMENT_FAILED,
+          createdAt: new Date(Date.now() - 10 * 60 * 1000),
+          items: [
+            {
+              productId: 4,
+              size: 'M',
+              toppings: [],
+              quantity: 2,
+            },
+          ],
+        },
+      ]);
+
+      const mockTx = {
+        recipe: {
+          findMany: vi.fn().mockResolvedValue([
+            {
+              productId: 4,
+              size: 'M',
+              amount: 25,
+              ingredient: { id: 1 },
+            },
+          ]),
+        },
+        toppingRecipe: { findMany: vi.fn().mockResolvedValue([]) },
+        ingredient: { update: vi.fn() },
+        order: {
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      };
+
+      prisma.$transaction.mockImplementation(async (cb) => cb(mockTx));
+
+      const count = await service.cancelExpiredPendingOrders();
+      expect(count).toBe(2);
+      expect(prisma.order.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            status: { in: [OrderStatus.PENDING, OrderStatus.PAYMENT_FAILED] },
+          }),
+        }),
+      );
+      // Đã hoàn kho cho cả 2 đơn
+      expect(mockTx.ingredient.update).toHaveBeenCalled();
     });
 
     it('cho phép Staff/Admin cập nhật PAID -> PREPARING thành công', async () => {
@@ -998,6 +1101,73 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
           1,
         ),
       ).rejects.toThrow(BadRequestException);
+    });
+
+    it('chống Spam Cart Hoarding DoS: ném BadRequestException khi user đã có >= 5 đơn PENDING', async () => {
+      prisma.order.count.mockResolvedValueOnce(5);
+
+      await expect(
+        service.createOrder(
+          {
+            items: [
+              {
+                productId: 1,
+                productName: 'Cà phê',
+                size: 'M',
+                toppings: [],
+                quantity: 1,
+              },
+            ],
+          },
+          1,
+        ),
+      ).rejects.toThrow(/Bạn đang có 5 đơn hàng chờ thanh toán/i);
+    });
+
+    it('chống gian lận dùng 1 voucher cá nhân cho nhiều đơn PENDING đồng thời', async () => {
+      // 0 đơn pending tổng thể
+      prisma.order.count.mockResolvedValueOnce(0);
+
+      // product mock
+      prisma.product.findMany.mockResolvedValueOnce([
+        { id: 1, name: 'Cà phê Đen', basePrice: 29000, isActive: true },
+      ]);
+      (prisma as any).toppingRecipe = {
+        findMany: vi.fn().mockResolvedValue([]),
+      };
+      (prisma as any).discountCode = {
+        findUnique: vi.fn().mockResolvedValue(null),
+      };
+      (prisma as any).userVoucher = {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 1,
+          userId: 1,
+          code: 'PERSONAL10',
+          quantity: 1,
+          discountPercent: 10,
+        }),
+      };
+
+      // Giả lập đã có 1 đơn PENDING đang áp dụng mã này
+      prisma.order.count.mockResolvedValueOnce(1);
+
+      await expect(
+        service.createOrder(
+          {
+            items: [
+              {
+                productId: 1,
+                productName: 'Cà phê Đen',
+                size: 'M',
+                toppings: [],
+                quantity: 1,
+              },
+            ],
+            discountCode: 'PERSONAL10',
+          },
+          1,
+        ),
+      ).rejects.toThrow(/Voucher cá nhân "PERSONAL10" đang được áp dụng cho một đơn hàng chờ thanh toán khác/i);
     });
   });
 });

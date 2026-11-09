@@ -52,8 +52,8 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Tự động quét và hủy các đơn hàng PENDING đã quá 5 phút (TTL = 5 minutes).
-   * Hoàn trả 100% nguyên vật liệu vào kho thông qua Transaction.
+   * Tự động quét và hủy các đơn hàng PENDING & PAYMENT_FAILED đã quá 5 phút (TTL = 5 minutes).
+   * Hoàn trả 100% nguyên vật liệu vào kho thông qua Transaction và CAS Guard (INV-01, INV-02).
    */
   async cancelExpiredPendingOrders(): Promise<number> {
     const EXPIRE_TIMEOUT_MS = 5 * 60 * 1000; // 5 phút
@@ -61,7 +61,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
 
     const expiredOrders = await this.prisma.order.findMany({
       where: {
-        status: OrderStatus.PENDING,
+        status: { in: [OrderStatus.PENDING, OrderStatus.PAYMENT_FAILED] },
         createdAt: { lte: expiryThreshold },
       },
       include: { items: true },
@@ -75,6 +75,25 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
     for (const order of expiredOrders) {
       try {
         await this.prisma.$transaction(async (tx: any) => {
+          // [INV-01 & INV-02] CAS Guard: chỉ cập nhật nếu trạng thái hiện tại vẫn chưa bị thay đổi bởi tiến trình khác
+          if (tx.order?.updateMany) {
+            const casResult = await tx.order.updateMany({
+              where: {
+                id: order.id,
+                status: order.status,
+              },
+              data: { status: OrderStatus.CANCELLED },
+            });
+            if (casResult.count === 0) {
+              return;
+            }
+          } else {
+            await tx.order.update({
+              where: { id: order.id },
+              data: { status: OrderStatus.CANCELLED },
+            });
+          }
+
           if (tx.recipe && tx.ingredient && Array.isArray(order.items)) {
             const requiredIngredients = await this.computeRequiredIngredients(
               tx,
@@ -90,15 +109,10 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
               });
             }
           }
-
-          await tx.order.update({
-            where: { id: order.id },
-            data: { status: OrderStatus.CANCELLED },
-          });
         });
         cancelledCount++;
         this.logger.log(
-          `[Auto-Expire 5m] Đơn hàng #${order.id} đã tự động hủy do quá 5 phút chưa thanh toán. Đã hoàn trả nguyên liệu vào kho.`,
+          `[Auto-Expire 5m] Đơn hàng #${order.id} (${order.status}) đã tự động hủy do quá 5 phút chưa hoàn tất thanh toán. Đã hoàn trả nguyên liệu vào kho.`,
         );
       } catch (err) {
         this.logger.error(
@@ -196,6 +210,23 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
   }
 
   async createOrder(dto: CreateOrderDto, userId: number) {
+    // 0. Chống Spam đơn hàng ảo (Cart Hoarding DoS): Giới hạn tối đa 5 đơn PENDING đồng thời cho mỗi user
+    if (userId && this.prisma.order?.count) {
+      const activePendingCount = await this.prisma.order
+        .count({
+          where: {
+            userId,
+            status: OrderStatus.PENDING,
+          },
+        })
+        .catch(() => 0);
+      if (activePendingCount >= 5) {
+        throw new BadRequestException(
+          'Bạn đang có 5 đơn hàng chờ thanh toán. Vui lòng hoàn tất thanh toán hoặc hủy đơn cũ trước khi đặt đơn mới.',
+        );
+      }
+    }
+
     // 1. Tính rawSubtotal và serverUnitPrice hoàn toàn từ DB
     const productIds = [...new Set(dto.items.map((i) => i.productId))];
 
@@ -223,6 +254,12 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       if (!matchedProduct || matchedProduct.isActive === false) {
         throw new BadRequestException(
           `Sản phẩm #${item.productId} không tồn tại hoặc đã ngừng kinh doanh`,
+        );
+      }
+
+      if (matchedProduct.isSoldOutManual === true) {
+        throw new BadRequestException(
+          `Sản phẩm "${matchedProduct.name}" hiện đang tạm ngưng phục vụ (Hết hàng). Vui lòng chọn món khác.`,
         );
       }
 
@@ -332,6 +369,23 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
           }).catch(() => null);
 
           if (personalVoucher) {
+            // Chống gian lận dùng 1 voucher cho nhiều đơn đồng thời:
+            const pendingWithVoucher = await (this.prisma as any).order
+              .count({
+                where: {
+                  userId,
+                  discountCode: code,
+                  status: OrderStatus.PENDING,
+                },
+              })
+              .catch(() => 0);
+
+            if (pendingWithVoucher >= (personalVoucher.quantity || 1)) {
+              throw new BadRequestException(
+                `Voucher cá nhân "${code}" đang được áp dụng cho một đơn hàng chờ thanh toán khác của bạn.`,
+              );
+            }
+
             if (personalVoucher.minOrderAmount) {
               minOrderReq = Math.max(minOrderReq, Number(personalVoucher.minOrderAmount));
             }
@@ -627,9 +681,9 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       if (nextStatus !== OrderStatus.CANCELLED) {
         throw new ForbiddenException('Khách hàng không có quyền tự chuyển trạng thái đơn hàng sang trạng thái này');
       }
-      // Chỉ được hủy khi đơn đang ở PENDING:
-      if (order.status !== OrderStatus.PENDING) {
-        throw new BadRequestException('Chỉ có thể hủy đơn hàng đang ở trạng thái Chờ thanh toán (PENDING)');
+      // Chỉ được hủy khi đơn đang ở PENDING hoặc PAYMENT_FAILED (INV-02):
+      if (order.status !== OrderStatus.PENDING && order.status !== OrderStatus.PAYMENT_FAILED) {
+        throw new BadRequestException('Chỉ có thể hủy đơn hàng đang ở trạng thái Chờ thanh toán (PENDING) hoặc Thanh toán thất bại (PAYMENT_FAILED)');
       }
     }
 
@@ -660,6 +714,28 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
     // Nếu hủy đơn (CANCELLED) và có $transaction + recipe -> hoàn lại kho nguyên vật liệu & trừ lại điểm thưởng
     if (nextStatus === OrderStatus.CANCELLED && this.prisma.$transaction) {
       const updated = await this.prisma.$transaction(async (tx: any) => {
+        // [INV-01] CAS (Compare-And-Swap) Guard: cập nhật trạng thái nguyên tử ngay từ đầu transaction.
+        // Chỉ cập nhật nếu trạng thái hiện tại đúng bằng previousStatus.
+        // Nếu count === 0 thì đơn hàng đã bị hủy hoặc thay đổi bởi request song song hoặc cron job.
+        if (tx.order?.updateMany) {
+          const casResult = await tx.order.updateMany({
+            where: {
+              id: orderId,
+              status: previousStatus,
+            },
+            data: {
+              status: nextStatus,
+              voucherDeducted: false,
+              ...staffData,
+            },
+          });
+          if (casResult.count === 0) {
+            throw new ConflictException(
+              'Trạng thái đơn hàng đã thay đổi hoặc đang được xử lý bởi một tiến trình khác.',
+            );
+          }
+        }
+
         if (tx.recipe && tx.ingredient && Array.isArray(order.items)) {
           const requiredIngredients = await this.computeRequiredIngredients(
             tx,
@@ -732,10 +808,25 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
           }
         }
 
-        return tx.order.update({
-          where: { id: orderId },
-          data: { status: nextStatus, voucherDeducted: false },
-        });
+        let updatedRecord: any = null;
+        if (tx.order?.findUnique) {
+          updatedRecord = await tx.order.findUnique({ where: { id: orderId } });
+        }
+        if (!updatedRecord && tx.order?.update) {
+          updatedRecord = await tx.order.update({
+            where: { id: orderId },
+            data: { status: nextStatus, voucherDeducted: false, ...staffData },
+          });
+        }
+
+        return (
+          updatedRecord || {
+            id: orderId,
+            status: nextStatus,
+            ...staffData,
+            updatedAt: new Date(),
+          }
+        );
       });
 
       return {
@@ -839,7 +930,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
     const isStaffOrAdmin =
       userRole === Role.STAFF || userRole === Role.ADMIN;
 
-    if (!isStaffOrAdmin && order.userId !== null && order.userId !== userId) {
+    if (!isStaffOrAdmin && (order.userId === null || order.userId !== userId)) {
       throw new ForbiddenException('Bạn không có quyền truy cập đơn hàng này');
     }
 
@@ -884,7 +975,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
     const isStaffOrAdmin =
       userRole === Role.STAFF || userRole === Role.ADMIN;
 
-    if (!isStaffOrAdmin && order.userId !== null && order.userId !== userId) {
+    if (!isStaffOrAdmin && (order.userId === null || order.userId !== userId)) {
       throw new ForbiddenException('Bạn không có quyền xóa đơn hàng này');
     }
 

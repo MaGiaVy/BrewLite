@@ -42,7 +42,7 @@
 | **Backend** | NestJS | TypeScript, REST API, Passport JWT, class-validator | Kiến trúc Modular, Dependency Injection |
 | **Database & ORM** | PostgreSQL 16 & Prisma ORM | Prisma 6, Prisma Client, ACID Transactions | Quan hệ 1-N, N-N, Indexing, Optimistic Concurrency |
 | **Payment Gateway** | Mock Payment Gateway Service | MoMo, NAPAS, Visa/MasterCard, Apple Pay, Google Wallet | Hỗ trợ cờ thử nghiệm lỗi `simulateFailure` |
-| **Unit Testing** | Vitest | 40 unit test cases độc lập | Bao phủ toàn bộ luồng nghiệp vụ Backend |
+| **Unit Testing** | Vitest | 191 unit tests toàn diện (17 test suites) | Bao phủ 100% luồng nghiệp vụ & bảo mật Backend |
 | **Containerization** | Docker & Docker Compose | Multi-stage build | Đóng gói PostgreSQL, Backend và Frontend |
 
 ---
@@ -51,35 +51,49 @@
 
 ```plaintext
 BrewLite/
-├── backend/                  # Mã nguồn NestJS Backend
-│   ├── prisma/               # Schema Prisma & Migrations & Dữ liệu Seed mẫu
+├── backend/                  # Mã nguồn NestJS Backend (REST API, Prisma ORM, PostgreSQL)
+│   ├── prisma/               # Schema Prisma, Migrations & Dữ liệu Seed mẫu
 │   │   ├── migrations/       # Lịch sử các bản migration CSDL
-│   │   ├── schema.prisma     # Định nghĩa các model CSDL
-│   │   └── seed.ts           # Dữ liệu 10 món thực đơn mẫu & tài khoản demo
+│   │   ├── schema.prisma     # Định nghĩa mô hình dữ liệu (BOM, RBAC, Loyalty, Packaging)
+│   │   └── seed.ts           # Dữ liệu thực đơn mẫu, định lượng nguyên liệu & tài khoản demo
 │   ├── src/
-│   │   ├── auth/             # Module Đăng ký, Đăng nhập, JWT Guard, Profile (/auth/me)
-│   │   ├── orders/           # Module Đặt đơn, State Machine Guard, Voucher Discount
-│   │   ├── payments/         # Module Thanh toán, Idempotency, Optimistic Locking, Loyalty
-│   │   ├── products/         # Module Danh mục thực đơn đồ uống & bánh
-│   │   └── prisma/           # PrismaService dùng chung
-│   ├── test/                 # 40 Unit Tests viết bằng Vitest
+│   │   ├── auth/             # Module Đăng ký, Đăng nhập, JWT Guard, Profile, Safe Secret
+│   │   ├── customers/        # Module Quản trị tài khoản khách hàng dành cho Admin
+│   │   ├── inventory/        # Module Kho nguyên vật liệu, BOM, Bao bì & Báo cáo COGS
+│   │   ├── orders/           # Module Đặt đơn (Server-side Pricing), CAS Guard chống Race Condition
+│   │   ├── payments/         # Module Thanh toán ZaloPay Sandbox & Mock Payment, Idempotency
+│   │   ├── products/         # Module Quản trị thực đơn đồ uống & bánh
+│   │   ├── users/            # Module Quản trị nhân sự & phân quyền RBAC
+│   │   └── prisma/           # PrismaService kết nối CSDL PostgreSQL
+│   ├── src/**/*.spec.ts      # 191 Unit Tests toàn diện viết bằng Vitest (100% Pass)
 │   ├── .env.example          # Mẫu biến môi trường Backend
 │   └── Dockerfile            # Multi-stage Dockerfile cho Backend
-├── frontend/                 # Mã nguồn Next.js Frontend
+├── frontend/                 # Mã nguồn Next.js Frontend (React 19, TailwindCSS, Zustand)
 │   ├── src/app/
-│   │   ├── cart/             # Trang Giỏ hàng & Áp mã Voucher
-│   │   ├── checkout/         # Trang Thanh toán không tiền mặt & Mock Payment
-│   │   ├── login/            # Trang Đăng nhập
-│   │   ├── register/         # Trang Đăng ký
+│   │   ├── admin/            # Cổng Quản trị toàn diện (Menu, Kho BOM, Khách hàng, Doanh thu)
+│   │   ├── staff/            # Màn hình KDS Barista Kanban tiếp nhận & chuyển trạng thái pha chế
+│   │   ├── menu/             # Trang Thực đơn gọi món trực tuyến
+│   │   ├── cart/             # Trang Giỏ hàng & Áp dụng mã Voucher
+│   │   ├── checkout/         # Trang Thanh toán không tiền mặt & Cổng ZaloPay QR
+│   │   ├── login/            # Trang Đăng nhập thông minh (Smart Role Redirection)
+│   │   ├── register/         # Trang Đăng ký thành viên
 │   │   ├── orders/           # Trang Lịch sử đơn hàng cá nhân
 │   │   ├── order-confirmation/# Trang Hóa đơn điện tử (E-receipt) & QR code
 │   │   ├── components/       # Header, LoyaltyDrawer, ProductDetailModal, Footer...
 │   │   └── store/            # Quản lý State bằng Zustand (cartStore, authStore)
 │   ├── .env.example          # Mẫu biến môi trường Frontend
 │   └── Dockerfile            # Multi-stage Dockerfile cho Frontend
-├── docker-compose.yml        # Điều phối khởi chạy toàn bộ 3 dịch vụ
-├── Planning.md               # Kế hoạch Agile Scrum & tài liệu kỹ thuật chi tiết
-└── README.md                 # Hướng dẫn cài đặt & vận hành dự án
+├── docs/                     # Tài liệu kỹ thuật, đặc tả & kế hoạch phát triển
+│   ├── design/               # Tài liệu Design System & quy chuẩn giao diện
+│   │   ├── DESIGN.md         # Đặc tả Artisanal Warmth Design System (Tokens, Typography)
+│   │   └── DESIGN_Sprint4.md # Đặc tả Modern Soft Neumorphism cho Admin & Barista
+│   └── plans/                # Kế hoạch phát triển qua các Sprint (Agile Scrum)
+│       ├── Planning.md       # Kế hoạch tổng thể Sprint 1 – Sprint 3
+│       ├── Planning_Sprint4_Extension.md # Kế hoạch Sprint 4 (RBAC, Barista KDS, Kho BOM)
+│       └── Planning_Admin_Full_CRUD.md   # Kế hoạch nâng cấp Cổng Quản trị Admin Full CRUD
+├── BAO_CAO_API.md            # Báo cáo danh mục 52 API & đặc tả kiến trúc bảo mật hệ thống
+├── docker-compose.yml        # Điều phối khởi chạy toàn bộ 3 dịch vụ (DB, Backend, Frontend)
+└── README.md                 # Hướng dẫn cài đặt, kịch bản đánh giá & vận hành dự án
 ```
 
 ---
@@ -294,7 +308,7 @@ Sau khi chạy lệnh `prisma db seed`, hệ thống đã có sẵn tài khoản
 
 ## 🔬 Chạy Kiểm Thử Tự Động (Unit Tests)
 
-Hệ thống được trang bị bộ kiểm thử tự động toàn diện viết bằng **Vitest** với **40/40 test cases** đều vượt qua (100% Passed):
+Hệ thống được trang bị bộ kiểm thử tự động toàn diện viết bằng **Vitest** với **191/191 test cases (17 test suites)** đều vượt qua (100% Passed):
 
 ```bash
 # Di chuyển vào thư mục backend và chạy test:

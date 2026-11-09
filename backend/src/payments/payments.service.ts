@@ -217,6 +217,7 @@ export class PaymentsService {
           data: {
             status: OrderStatus.PAID,
             version: { increment: 1 },
+            voucherDeducted: Boolean(currentOrder.discountCode),
           },
         });
 
@@ -224,6 +225,34 @@ export class PaymentsService {
           throw new ConflictException(
             `Don hang #${currentOrder.id} da bi thay doi boi mot request khac. Vui long thu lai.`,
           );
+        }
+
+        // Trừ số lượng voucher cá nhân ngay khi thanh toán thành công
+        if (currentOrder.userId && currentOrder.discountCode && (tx as any).userVoucher) {
+          try {
+            const userVoucher = await (tx as any).userVoucher.findUnique({
+              where: {
+                userId_code: {
+                  userId: currentOrder.userId,
+                  code: currentOrder.discountCode,
+                },
+              },
+            });
+            if (userVoucher) {
+              if (userVoucher.quantity > 1) {
+                await (tx as any).userVoucher.update({
+                  where: { id: userVoucher.id },
+                  data: { quantity: { decrement: 1 } },
+                });
+              } else {
+                await (tx as any).userVoucher.delete({
+                  where: { id: userVoucher.id },
+                });
+              }
+            }
+          } catch {
+            // Bỏ qua nếu bảng userVoucher chưa sẵn sàng
+          }
         }
 
         let paymentRecord;
@@ -410,6 +439,14 @@ export class PaymentsService {
         return { return_code: 1, return_message: 'success' };
       }
 
+      // Bảo mật PAY-02: Kiểm tra số tiền thanh toán thực tế khớp chính xác với order.totalAmount
+      if (amount !== undefined && amount !== null && Number(amount) !== order.totalAmount) {
+        this.logger.error(
+          `[ZaloPay Callback] Gian lận số tiền! Số tiền thanh toán (${amount}) không khớp với tổng tiền đơn hàng #${orderId} (${order.totalAmount})`,
+        );
+        return { return_code: 0, return_message: 'Số tiền thanh toán không khớp với đơn hàng' };
+      }
+
       // Chống Replay Attack / Hồi sinh đơn đã bị hủy:
       if (order.status === OrderStatus.CANCELLED) {
         this.logger.warn(
@@ -425,8 +462,35 @@ export class PaymentsService {
           data: {
             status: OrderStatus.PAID,
             version: { increment: 1 },
+            voucherDeducted: Boolean(order.discountCode),
           },
         });
+
+        // Trừ voucher cá nhân nếu có áp dụng mã
+        if (order.userId && order.discountCode && (tx as any).userVoucher) {
+          try {
+            const userVoucher = await (tx as any).userVoucher.findUnique({
+              where: {
+                userId_code: {
+                  userId: order.userId,
+                  code: order.discountCode,
+                },
+              },
+            });
+            if (userVoucher) {
+              if (userVoucher.quantity > 1) {
+                await (tx as any).userVoucher.update({
+                  where: { id: userVoucher.id },
+                  data: { quantity: { decrement: 1 } },
+                });
+              } else {
+                await (tx as any).userVoucher.delete({
+                  where: { id: userVoucher.id },
+                });
+              }
+            }
+          } catch {}
+        }
 
         await tx.payment.create({
           data: {

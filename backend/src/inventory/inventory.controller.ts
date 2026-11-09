@@ -152,7 +152,9 @@ export class InventoryController {
     return this.inventoryService.deleteToppingRecipe(id);
   }
 
-  /** GET /inventory/vouchers — Danh sách Mã giảm giá / Khuyến mãi */
+  /** GET /inventory/vouchers — Danh sách Mã giảm giá / Khuyến mãi (Chỉ ADMIN) */
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
   @Get('vouchers')
   getAllVouchers() {
     return this.inventoryService.getAllVouchers(false);

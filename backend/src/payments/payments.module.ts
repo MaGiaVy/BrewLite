@@ -7,13 +7,14 @@ import { PaymentsController } from './payments.controller.js';
 import { PaymentsService } from './payments.service.js';
 import { MockPaymentService } from './mock-payment.service.js';
 import { ZaloPayService } from './zalopay.service.js';
+import { getJwtSecret } from '../auth/jwt-secret.helper.js';
 
 @Module({
   imports: [
     PrismaModule,
     PassportModule,
     JwtModule.register({
-      secret: process.env.JWT_SECRET ?? 'brewlite_secret_key',
+      secret: getJwtSecret(),
       signOptions: { expiresIn: '7d' },
     }),
   ],

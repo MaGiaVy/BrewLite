@@ -2,14 +2,15 @@
 
 > **Kho mã nguồn:** `https://github.com/MaGiaVy/BrewLite.git` (Nhánh: `main` — Commit: `25b2e69`)  
 > **Workspace:** `D:\SWE\BrewLite_SWE`  
-> **Cập nhật ngày:** 08/11/2026  
-> **Tác giả sửa lỗi & thẩm tra:** Mã Gia Vỹ (`3124410414@sv.sgu.edu.vn`)
+> **Cập nhật lần cuối vào ngày:** 09/11/2026  
+> **Tác giả:** Mã Gia Vỹ, Huỳnh Tuấn Kiệt
 
 ---
 
 ## MỤC LỤC
-1. [Tổng quan hệ thống API & Tình trạng khắc phục lỗ hổng](#i-tổng-quan-hệ-thống-api--tình-trạng-khắc-phục-lỗ-hổng)
-2. [Chi tiết từng nhóm API kèm Ví dụ Request / Response Body](#ii-chi-tiết-từng-nhóm-api-kèm-ví-dụ-body)
+1. [Tổng quan hệ thống & Cơ cấu API Endpoints](#i-tổng-quan-hệ-thống--cơ-cấu-api-endpoints)
+2. [Các nguyên tắc thiết kế & Cơ chế bảo mật cốt lõi](#ii-các-nguyên-tắc-thiết-kế--cơ-chế-bảo-mật-cốt-lõi-security--concurrency-controls)
+3. [Chi tiết từng nhóm API kèm Ví dụ Request / Response Body](#iii-chi-tiết-từng-nhóm-api-kèm-ví-dụ-body)
    - [Nhóm 1: Xác thực & Khách hàng Thành viên (Auth & Loyalty)](#1-nhóm-xác-thực--khách-hàng-thành-viên-auth--loyalty)
    - [Nhóm 2: Thực đơn & Món uống (Products & Menu)](#2-nhóm-thực-đơn--món-uống-products--menu)
    - [Nhóm 3: Đặt hàng hoàn toàn dưới Backend (Orders)](#3-nhóm-đặt-hàng-hoàn-toàn-dưới-backend-orders)
@@ -17,12 +18,12 @@
    - [Nhóm 5: Quản trị Kho, Định lượng BOM & Voucher (Inventory)](#5-nhóm-quản-trị-kho-định-lượng-bom--voucher-inventory)
    - [Nhóm 6: Quản trị Tài khoản Khách hàng (Admin Customers)](#6-nhóm-quản-trị-tài-khoản-khách-hàng-admin-customers)
    - [Nhóm 7: Quản trị Nhân viên & RBAC (Admin Staff)](#7-nhóm-quản-trị-nhân-viên--rbac-admin-staff)
-3. [Sơ đồ luồng hoạt động chuẩn giữa Frontend và Backend](#iii-sơ-đồ-luồng-nghiệp-vụ-chuẩn)
-4. [Hướng dẫn chạy kiểm thử tự động & Postman/Thunder Client](#iv-hướng-dẫn-chạy-thử-nghiệm)
+4. [Sơ đồ luồng hoạt động chuẩn giữa Frontend và Backend](#iv-sơ-đồ-luồng-nghiệp-vụ-chuẩn)
+5. [Hướng dẫn chạy kiểm thử tự động & Postman/Thunder Client](#v-hướng-dẫn-chạy-thử-nghiệm)
 
 ---
 
-## I. TỔNG QUAN HỆ THỐNG API & TÌNH TRẠNG KHẮC PHỤC LỖ HỔNG
+## I. TỔNG QUAN HỆ THỐNG & CƠ CẤU API ENDPOINTS
 
 Hệ thống backend BrewLite (NestJS + Prisma ORM + PostgreSQL) cung cấp **52 API endpoints** được phân chia theo 7 Controller nghiệp vụ chính.
 
@@ -33,14 +34,91 @@ Hệ thống backend BrewLite (NestJS + Prisma ORM + PostgreSQL) cung cấp **52
 - **PUT (3 APIs):** Cập nhật toàn diện thông tin món uống, công thức định lượng món và định lượng topping.
 - **DELETE (3 APIs):** Xóa món, xóa đơn nháp, xóa khách hàng (Smart Delete an toàn).
 
-### 2. Tình trạng 3 Lỗi Trọng Yếu Đã Được Khắc Phục Hoàn Tất
-- ✅ **Lỗi 1 (`POST /orders` tin tưởng `unitPrice`):** **ĐÃ KHẮC PHỤC TRIỆT ĐỂ**. `unitPrice` được chuyển thành optional. Backend tự động tính toán lại 100% đơn giá từ DB (`basePrice` + phụ thu size + giá topping từ `ToppingRecipe`). Khách gửi giá 0đ vẫn bị ghi đè thành giá thực tế.
-- ✅ **Lỗi 2 (`POST /payments/zalopay/confirm` & `/cancel` thiếu bảo vệ):** **ĐÃ KHẮC PHỤC TRIỆT ĐỂ**. Đã gắn `@UseGuards(JwtAuthGuard)`, kiểm tra sở hữu đơn hàng hoặc quyền `ADMIN`, kiểm tra khớp chính xác số tiền với ZaloPay và chặn tái kích hoạt đơn đã hủy.
-- ✅ **Lỗi 3 (`POST /auth/redeem-points` nhận `discountPercent`):** **ĐÃ KHẮC PHỤC TRIỆT ĐỂ**. Loại bỏ hoàn toàn `discountPercent` khỏi payload. Toàn bộ mã giảm giá và số điểm quy đổi được xác thực trên server qua `VOUCHER_CATALOG` và bảng `discountCode`. Dùng lệnh cập nhật khóa nguyên tử chống âm điểm.
+---
+
+## II. CÁC NGUYÊN TẮC THIẾT KẾ & CƠ CHẾ BẢO MẬT CỐT LÕI (SECURITY & CONCURRENCY CONTROLS)
+
+Hệ thống API BrewLite được thiết kế tuân thủ các chuẩn mực an toàn thông tin OWASP API Security và tối ưu hoá giao dịch đồng thời trong thương mại điện tử, bao gồm các trụ cột kiến trúc:
+
+### 1. Kiểm soát đồng thời nguyên tử & Chống Race Condition (Atomic CAS Concurrency Guard)
+- **Bối cảnh & Rủi ro:** Khi có nhiều request đồng thời (ví dụ: khách hàng gửi nhiều yêu cầu hủy đơn cùng mili-giây, hoặc đơn hàng vừa bị khách bấm hủy vừa bị cron job 5 phút quét trúng), nếu kiểm tra trạng thái ngoài transaction và cộng kho, nguyên liệu có thể bị cộng hoàn gấp đôi (Double-Restock).
+- **Cơ chế kiểm soát:** Áp dụng mô hình **Compare-And-Swap (CAS)** nguyên tử ngay từ đầu Transaction:
+  ```typescript
+  const casResult = await tx.order.updateMany({
+    where: { id: orderId, status: previousStatus },
+    data: { status: OrderStatus.CANCELLED, voucherDeducted: false, ...staffData },
+  });
+  if (casResult.count === 0) {
+    throw new ConflictException('Trạng thái đơn hàng đã thay đổi hoặc đang được xử lý bởi tiến trình khác.');
+  }
+  ```
+- **Hiệu quả:** Chỉ một tiến trình duy nhất thực hiện chuyển trạng thái thành công mới được phép cộng hoàn kho nguyên liệu. Mọi tiến trình cạnh tranh còn lại đều bị chặn ngay lập tức, bảo đảm số lượng tồn kho nguyên vật liệu luôn chính xác tuyệt đối.
+
+### 2. Quản lý vòng đời đơn hàng & Giải phóng kho tự động (TTL Auto-Expiration Engine)
+- **Bối cảnh & Rủi ro:** Khi khách đặt hàng, hệ thống trừ trước nguyên vật liệu trong kho để giữ chỗ. Nếu khách hàng không thanh toán hoặc thanh toán lỗi (`PAYMENT_FAILED`) mà bị bỏ quên, nguyên liệu sẽ bị chiếm dụng vĩnh viễn gây cạn kiệt menu (Denial-of-Inventory).
+- **Cơ chế kiểm soát:** Cron task nền tự động quét định kỳ các đơn hàng chưa hoàn tất thanh toán gồm cả `PENDING` và `PAYMENT_FAILED` có thời gian khởi tạo quá 5 phút (`TTL = 5 minutes`):
+  ```typescript
+  const expiredOrders = await this.prisma.order.findMany({
+    where: {
+      status: { in: [OrderStatus.PENDING, OrderStatus.PAYMENT_FAILED] },
+      createdAt: { lte: expiryThreshold },
+    },
+    include: { items: true },
+  });
+  ```
+- **Hiệu quả:** Tự động hoàn trả 100% nguyên liệu giữ chỗ về kho theo đúng định lượng BOM, đảm bảo kho hàng luôn được giải phóng kịp thời phục vụ khách hàng khác.
+
+### 3. Bảo mật thanh toán & Cô lập môi trường (Environment Isolation & Strict IPN Webhook Verification)
+- **Bối cảnh & Rủi ro:** Cổng thử nghiệm Mock Payment và Sandbox nếu để mở tự do trên môi trường Production sẽ trở thành cửa hậu cho phép người dùng tự xác nhận đơn đã thanh toán. Đồng thời, Webhook thanh toán từ bên thứ ba có thể bị giả mạo tham số số tiền.
+- **Cơ chế kiểm soát:**
+  - **Cô lập môi trường:** Cổng `POST /payments` và `POST /payments/zalopay/confirm` được bảo vệ chặt chẽ bằng cờ môi trường `process.env.NODE_ENV === 'production'`. Trên môi trường thực, cổng Mock Payment và Sandbox bị đóng hoàn toàn trừ khi Quản trị viên kích hoạt có chủ đích để demo (`ALLOW_MOCK_PAYMENT=true`).
+  - **Thẩm tra Webhook đa lớp:** Xác thực chữ ký số HMAC Key2 chống sửa đổi dữ liệu truyền tải, kết hợp kiểm tra chặt chẽ số tiền thực tế nhận được từ ZaloPay IPN khớp chính xác với giá trị đơn hàng trong CSDL (`Number(amount) === order.totalAmount`).
+- **Hiệu quả:** Ngăn chặn kẻ gian tạo giao dịch 1.000đ để thanh toán khống cho đơn hàng 500.000đ, bảo toàn doanh thu quán.
+
+### 4. Nguyên tắc Backend Single Source of Truth & Kiểm soát Khuyến mãi (Server-side Pricing & Voucher Guard)
+- **Bối cảnh & Rủi ro:** Client gửi đơn giá `unitPrice` giả mạo, hoặc lợi dụng độ trễ để gửi đồng thời nhiều request sử dụng cùng 1 mã voucher giảm giá (Double-Spending / Voucher Replay Attack).
+- **Cơ chế kiểm soát:**
+  - **Server-side Pricing:** Backend tính toán lại 100% giá sản phẩm từ DB (`basePrice` + phụ thu size + giá topping từ `ToppingRecipe`). Tham số `unitPrice` từ Client hoàn toàn bị ghi đè.
+  - **Voucher Guard:** Kiểm tra và khóa giữ chỗ (hold reservation) voucher cá nhân ngay khi tạo đơn `PENDING` (chặn tạo nhiều đơn cùng 1 voucher). Khi đơn hàng chuyển sang `PAID`, số lượng voucher lập tức được khấu trừ trong CSDL và gắn cờ `voucherDeducted: true`.
+  - **Bảo vệ cờ hết hàng thủ công:** Kiểm tra nghiêm ngặt cờ `isSoldOutManual === true` tại Backend, chặn việc gửi request trực tiếp để ép đặt món quán đang tạm ngưng phục vụ.
+- **Hiệu quả:** Bảo đảm tính toàn vẹn tài chính, chống gian lận giá và lạm dụng voucher khuyến mãi.
+
+### 5. Kiểm soát phân quyền (RBAC) & Bảo vệ đối tượng theo ngữ cảnh (Contextual Access Control & Anti-IDOR)
+- **Bối cảnh & Rủi ro:** Lỗ hổng Broken Object-Level Authorization (BOLA/IDOR) cho phép khách hàng xem hoặc xóa các đơn hàng vãng lai tại quầy (đơn có `userId === null`). Hoặc Admin cấp dưới tự ý cấp quyền Quản trị tối cao.
+- **Cơ chế kiểm soát:**
+  - **Anti-IDOR:** Trong các hàm tra cứu và xóa/hủy đơn hàng, áp dụng biểu thức logic:
+    ```typescript
+    if (!isStaffOrAdmin && (order.userId === null || order.userId !== userId)) {
+      throw new ForbiddenException('Bạn không có quyền truy cập đơn hàng này');
+    }
+    ```
+    Khách hàng chỉ xem/hủy được đơn của chính mình. Đơn vãng lai tại quầy chỉ có nhân viên quầy (`STAFF`) hoặc Quản trị viên (`ADMIN`) mới được xử lý.
+  - **Bảo vệ quyền Root Admin:** Chỉ tài khoản Root Admin (`admin@brewlite.vn`) mới có thẩm quyền phân bổ hoặc nâng cấp người dùng khác lên vai trò `ADMIN`.
+- **Hiệu quả:** Bảo vệ quyền riêng tư dữ liệu và duy trì phân cấp bảo mật chặt chẽ trong hệ thống.
+
+### 6. Xác thực phiên làm việc thời gian thực & Quản trị khóa ký an toàn (Realtime Token Invalidation & Strict Secret Config)
+- **Bối cảnh & Rủi ro:** Token JWT có thời hạn 7 ngày nếu chỉ giải mã tĩnh thì khi nhân viên vi phạm bị khóa tài khoản (`isActive: false`), token cũ vẫn tiếp tục truy cập trái phép được. Việc hardcode khóa bí mật JWT mặc định cũng tiềm ẩn nguy cơ bị giả mạo chữ ký.
+- **Cơ chế kiểm soát:**
+  - **Realtime Invalidation:** Phương thức `validate(payload)` trong `JwtStrategy` truy vấn CSDL theo thời gian thực: nếu `user.isActive === false`, request lập tức bị từ chối (`401 Unauthorized`).
+  - **Strict Secret Management:** Module `getJwtSecret()` kiểm tra nghiêm ngặt: trong môi trường Production, hệ thống bắt buộc phải có biến `JWT_SECRET` độc lập và từ chối khởi động nếu phát hiện khóa mặc định sơ sài.
+- **Hiệu quả:** Cho phép Quản trị viên vô hiệu hóa phiên truy cập của nhân viên vi phạm ngay lập tức, bảo đảm tính an toàn cho chữ ký số JWT.
+
+### 7. Bảo mật dữ liệu kinh doanh & Thanh lọc thông tin (Data Sanitization)
+- **Bối cảnh & Rủi ro:** API công khai cung cấp danh mục Topping để khách hàng xem thực đơn nếu trả về nguyên vẹn các trường nội bộ sẽ làm lộ giá vốn nhập hàng (COGS) của quán.
+- **Cơ chế kiểm soát:** Hàm `getPublicPricingConfig` áp dụng bộ lọc làm sạch dữ liệu (`Sanitization`), bóc tách loại bỏ trường `cogs` trước khi phản hồi về Client:
+  ```typescript
+  toppings: toppings.map(({ cogs, ...rest }) => rest)
+  ```
+- **Hiệu quả:** Giữ kín thông tin biên lợi nhuận và giá vốn nội bộ của chuỗi cửa hàng.
+
+### 8. Chuẩn hóa mô hình thực thể người dùng (Domain Model Integrity)
+- **Bối cảnh & Rủi ro:** Trường chức vụ công việc (`position`) nếu đặt giá trị mặc định cho toàn bộ bảng User sẽ khiến tài khoản khách hàng thông thường bị gán nhầm chức danh "Barista Pha Chế".
+- **Cơ chế kiểm soát:** Tách bạch trường `position` khỏi vai trò `CUSTOMER`. Tài khoản khách hàng khi đăng ký mới hoặc cập nhật thông tin luôn nhận `position: null`. Trường chức danh chỉ áp dụng và có ý nghĩa đối với nhân sự vận hành quầy (`STAFF`).
+- **Hiệu quả:** Dữ liệu người dùng được chuẩn hóa, nhất quán giữa mô hình cơ sở dữ liệu và giao diện thực tế.
 
 ---
 
-## II. CHI TIẾT TỪNG NHÓM API KÈM VÍ DỤ BODY
+## III. CHI TIẾT TỪNG NHÓM API KÈM VÍ DỤ BODY
 
 ### 1. Nhóm Xác thực & Khách hàng Thành viên (Auth & Loyalty)
 
@@ -659,7 +737,7 @@ Hệ thống backend BrewLite (NestJS + Prisma ORM + PostgreSQL) cung cấp **52
 
 ---
 
-## III. SƠ ĐỒ LUỒNG NGHIỆP VỤ CHUẨN
+## IV. SƠ ĐỒ LUỒNG NGHIỆP VỤ CHUẨN GIỮA FRONTEND VÀ BACKEND
 
 ### 1. Luồng Đặt hàng hoàn toàn dưới Backend (Server-side Pricing Flow)
 
@@ -709,7 +787,7 @@ sequenceDiagram
     ZaloGateway-->>User: Chuyển hướng về Frontend (/order-confirmation)
 
     User->>PayCtrl: POST /payments/zalopay/confirm { orderId: 105, appTransId }
-    Note over User,PayCtrl: Yêu cầu JWT Token (Đã Fix Lỗi #2)
+    Note over User,PayCtrl: Yêu cầu JWT Token & Xác thực quyền sở hữu đơn
     PayCtrl->>PaySvc: confirmZaloPaySandbox(orderId, appTransId, userId)
     
     PaySvc->>PaySvc: Kiểm tra quyền sở hữu: order.userId == userId?
@@ -724,12 +802,12 @@ sequenceDiagram
 
 ---
 
-## IV. HƯỚNG DẪN CHẠY THỬ NGHIỆM
+## V. HƯỚNG DẪN CHẠY THỬ NGHIỆM & KIỂM THỬ TỰ ĐỘNG
 
 ### 1. Chạy toàn bộ Test tự động (Automated Tests)
 Mở terminal tại thư mục gốc của dự án:
 ```bash
-# Chạy toàn bộ 183 unit tests backend
+# Chạy toàn bộ 191 unit tests backend (17 test suites)
 npm --prefix backend test
 
 # Kiểm tra bản build production backend (NestJS)

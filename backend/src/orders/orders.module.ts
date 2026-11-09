@@ -5,13 +5,14 @@ import { OrdersController } from './orders.controller.js';
 import { OrdersService } from './orders.service.js';
 import { PrismaModule } from '../prisma/prisma.module.js';
 import { JwtStrategy } from '../auth/jwt.strategy.js';
+import { getJwtSecret } from '../auth/jwt-secret.helper.js';
 
 @Module({
   imports: [
     PrismaModule,
     PassportModule,
     JwtModule.register({
-      secret: process.env.JWT_SECRET ?? 'brewlite_secret_key',
+      secret: getJwtSecret(),
       signOptions: { expiresIn: '7d' },
     }),
   ],

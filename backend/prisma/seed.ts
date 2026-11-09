@@ -754,6 +754,7 @@ async function main() {
       passwordHash: khachHash,
       role: Role.CUSTOMER,
       fullName: 'Khách Hàng Thân Thiết',
+      position: null,
       phone: '0901000003',
       position: null,
       loyaltyPoints: 120,
@@ -774,6 +775,12 @@ async function main() {
       fullName: 'Khách hàng Demo',
       position: null,
     },
+  });
+
+  // Đảm bảo toàn bộ tài khoản khách hàng không bị gán chức vụ nhân viên
+  await prisma.user.updateMany({
+    where: { role: Role.CUSTOMER },
+    data: { position: null },
   });
 
   // ─── 6. SYNCHRONIZE POSTGRES SEQUENCES TO PREVENT UNIQUE ID CONFLICTS ────────

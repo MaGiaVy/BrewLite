@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
   ArrayMinSize,
   IsArray,
   IsIn,
@@ -7,6 +8,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  MaxLength,
   Min,
   ValidateNested,
 } from 'class-validator';
@@ -22,7 +24,9 @@ export class OrderItemDto {
   size: string;
 
   @IsArray()
+  @ArrayMaxSize(10, { message: 'Mỗi món chỉ được chọn tối đa 10 topping' })
   @IsString({ each: true })
+  @MaxLength(50, { each: true, message: 'Tên topping không được vượt quá 50 ký tự' })
   toppings: string[];
 
   @IsInt()

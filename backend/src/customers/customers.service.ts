@@ -76,6 +76,7 @@ export class CustomersService {
         passwordHash: hashedPassword,
         fullName: dto.fullName.trim(),
         phone: dto.phone?.trim() || null,
+        position: null,
         role: Role.CUSTOMER,
         loyaltyPoints: 0, // RÀNG BUỘC SỐNG CÒN: Điểm mặc định khi tạo mới = 0
         isActive: true,

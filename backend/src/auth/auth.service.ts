@@ -79,7 +79,7 @@ function safeUser(u: {
     fullName: u.fullName,
     phone: u.phone,
     role: u.role ?? Role.CUSTOMER,
-    position: (u as any).position ?? null,
+    position: (u.role ?? Role.CUSTOMER) === Role.CUSTOMER ? null : ((u as any).position ?? null),
     isActive: (u as any).isActive !== false,
     loyaltyPoints: u.loyaltyPoints,
     createdAt: u.createdAt,
@@ -123,6 +123,7 @@ export class AuthService {
         passwordHash,
         fullName: dto.fullName,
         phone: dto.phone ?? null,
+        position: null,
         role: Role.CUSTOMER,
       },
     });

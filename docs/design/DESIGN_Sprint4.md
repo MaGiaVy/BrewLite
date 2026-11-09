@@ -4,7 +4,7 @@
 > **Dự án:** BrewLite — Nền Tảng Đặt & Thanh Toán Cà Phê Không Tiền Mặt  
 > **Chủ đề thiết kế:** **Artisanal Warmth × Modern Soft Neumorphism**  
 > **Nguyên tắc cốt lõi:** Tactile Clay Elevation • Subdued Warm Contrast • Dual Directional Lighting • High Ergonomics for Fast-Paced Operations  
-> **Tài liệu liên kết:** [`DESIGN.md`](file:///d:/SWE/BrewLite_SWE/DESIGN.md) (Gốc), [`Planning_Sprint4_Extension.md`](file:///d:/SWE/BrewLite_SWE/Planning_Sprint4_Extension.md).
+> **Tài liệu liên kết:** [`DESIGN.md`](./DESIGN.md) (Gốc), [`Planning_Sprint4_Extension.md`](../plans/Planning_Sprint4_Extension.md).
 
 ---
 

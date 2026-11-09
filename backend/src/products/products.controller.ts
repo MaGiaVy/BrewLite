@@ -15,6 +15,7 @@ import {
 import { AuthGuard } from '@nestjs/passport';
 import { Role } from '@prisma/client';
 import * as crypto from 'node:crypto';
+import { getJwtSecret } from '../auth/jwt-secret.helper.js';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import { Roles } from '../auth/roles.decorator.js';
 import { RolesGuard } from '../auth/roles.guard.js';
@@ -48,7 +49,7 @@ export function extractUserFromRequest(
     try {
       const parts = token.split('.');
       if (parts.length === 3) {
-        const secret = process.env.JWT_SECRET ?? 'brewlite_secret_key';
+        const secret = getJwtSecret();
         const expectedSignature = crypto
           .createHmac('sha256', secret)
           .update(`${parts[0]}.${parts[1]}`)

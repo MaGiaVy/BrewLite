@@ -169,6 +169,23 @@ export class UsersService {
       }
     }
 
+    // Bảo mật AUTH-03: Chỉ Root Admin mới có quyền thăng cấp tài khoản lên ADMIN
+    if (dto.role === Role.ADMIN && user.role !== Role.ADMIN) {
+      let currentAdminEmail: string | undefined;
+      if (currentAdminId) {
+        const adminUser = await this.prisma.user.findUnique({
+          where: { id: currentAdminId },
+          select: { email: true },
+        });
+        currentAdminEmail = adminUser?.email;
+      }
+      if (currentAdminEmail !== 'admin@brewlite.vn') {
+        throw new BadRequestException(
+          'Chỉ Quản trị viên Tối cao (Root Admin) mới có quyền thăng cấp tài khoản lên Quản trị viên (Admin)',
+        );
+      }
+    }
+
     if (dto.email && dto.email.toLowerCase().trim() !== user.email) {
       const emailExists = await this.prisma.user.findUnique({
         where: { email: dto.email.toLowerCase().trim() },

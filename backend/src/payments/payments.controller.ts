@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  ForbiddenException,
   Get,
   Headers,
   HttpCode,
@@ -38,6 +39,15 @@ export class PaymentsController {
     @Body() dto: CreatePaymentDto,
     @Headers('idempotency-key') idempotencyKey?: string,
   ) {
+    // Bảo mật PAY-01: Chặn Mock Payment trên môi trường Production (trừ khi có cờ cho phép chạy demo)
+    if (
+      process.env.NODE_ENV === 'production' &&
+      process.env.ALLOW_MOCK_PAYMENT !== 'true'
+    ) {
+      throw new ForbiddenException(
+        'Cổng thanh toán thử nghiệm (Mock Payment) đã bị vô hiệu hóa trên môi trường Production.',
+      );
+    }
     return this.paymentsService.processPayment(dto, req.user.userId, idempotencyKey);
   }
 
@@ -88,6 +98,15 @@ export class PaymentsController {
     @Body('orderId', ParseIntPipe) orderId?: number | string,
     @Body('appTransId') appTransId?: string,
   ) {
+    // Bảo mật PAY-01: Chặn bypass Sandbox confirm trên môi trường Production
+    if (
+      process.env.NODE_ENV === 'production' &&
+      process.env.ALLOW_SANDBOX_CONFIRM !== 'true'
+    ) {
+      throw new ForbiddenException(
+        'Xác nhận thanh toán Sandbox bị vô hiệu hóa trên môi trường Production. Vui lòng sử dụng Webhook chính thức từ ZaloPay.',
+      );
+    }
     if (typeof req === 'number') {
       return this.paymentsService.confirmZaloPaySandbox(
         req,

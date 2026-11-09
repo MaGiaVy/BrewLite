@@ -754,11 +754,17 @@ export class InventoryService {
       },
     ];
 
+    // Bảo mật INV-03: Loại bỏ trường giá vốn cogs khỏi API Public để không rò rỉ bí mật kinh doanh
+    const sanitizeTopping = (t: any) => {
+      const { cogs, ...publicData } = t;
+      return publicData;
+    };
+
     return {
       sizePricing,
-      toppings: drinkToppings,
-      allToppings: allToppingsList,
-      bakeryToppings,
+      toppings: drinkToppings.map(sanitizeTopping),
+      allToppings: allToppingsList.map(sanitizeTopping),
+      bakeryToppings: bakeryToppings.map(sanitizeTopping),
       bakeryServingStyles,
       vouchers,
     };
