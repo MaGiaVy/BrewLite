@@ -746,6 +746,7 @@ async function main() {
       passwordHash: khachHash,
       role: Role.CUSTOMER,
       fullName: 'Khách Hàng Thân Thiết',
+      position: null,
       loyaltyPoints: 120,
     },
     create: {
@@ -754,6 +755,7 @@ async function main() {
       role: Role.CUSTOMER,
       fullName: 'Khách Hàng Thân Thiết',
       phone: '0901000003',
+      position: null,
       loyaltyPoints: 120,
     },
   });
@@ -763,12 +765,14 @@ async function main() {
     update: {
       passwordHash: testHash,
       role: Role.CUSTOMER,
+      position: null,
     },
     create: {
       email: 'test@example.com',
       passwordHash: testHash,
       role: Role.CUSTOMER,
       fullName: 'Khách hàng Demo',
+      position: null,
     },
   });
 

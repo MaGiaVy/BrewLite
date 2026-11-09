@@ -145,7 +145,7 @@ model User {
   passwordHash  String
   fullName      String?
   phone         String?
-  position      String?       @default("Barista Pha Chế")
+  position      String?
   isActive      Boolean       @default(true)
   role          Role          @default(CUSTOMER)
   loyaltyPoints Int           @default(0)   // Task 10: Điểm Hạt Vàng tích lũy
