@@ -5,7 +5,12 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Header from "../components/Header";
 import Footer from "../components/Footer";
-import { apiFetch, useAuthStore } from "../store/authStore";
+import {
+  apiFetch,
+  useAuthStore,
+  clearActivePendingOrder,
+  readActivePendingOrder,
+} from "../store/authStore";
 import { isBakeryProduct } from "../store/cartStore";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -116,8 +121,8 @@ const STATUS_CONFIG: Record<
   },
   PAYMENT_FAILED: {
     label: "Thanh toán lỗi",
-    badgeClass: "bg-[#FAF0EE] text-[#8C3B32] ring-1 ring-[#8C3B32]/30 font-bold",
-    iconBg: "bg-gradient-to-br from-[#8C3B32] to-[#6E2822] text-white shadow-md shadow-[#8C3B32]/20",
+    badgeClass: "bg-rose-50 text-rose-700 ring-1 ring-rose-300 font-bold",
+    iconBg: "bg-gradient-to-br from-rose-500 to-amber-500 text-white shadow-md shadow-rose-500/20",
     icon: "error_outline",
     iconClass: "",
   },
@@ -133,10 +138,23 @@ const STATUS_CONFIG: Record<
 // Active statuses for live section
 const ACTIVE_STATUSES = ["PAID", "PREPARING", "READY"];
 
-type FilterKey = "all" | "active" | "completed" | "cancelled";
+type FilterKey = "all" | "active" | "completed" | "failed" | "cancelled";
 
 function isActive(status: string) {
   return ACTIVE_STATUSES.includes(status);
+}
+
+async function parseApiError(res: Response, fallback: string): Promise<string> {
+  try {
+    const data = await res.json();
+    if (Array.isArray(data?.message)) return data.message.join(", ");
+    if (typeof data?.message === "string" && data.message.trim()) {
+      return data.message;
+    }
+  } catch {
+    // ignore non-JSON body
+  }
+  return `${fallback} (HTTP ${res.status})`;
 }
 
 // ── Pending countdown timer component ─────────────────────────────────────────
@@ -148,19 +166,34 @@ function PendingCountdown({
   createdAt: string;
   onExpire?: () => void;
 }) {
+  const expiredNotifiedRef = useRef(false);
   const [timeLeft, setTimeLeft] = useState(() => {
     const expireTime = new Date(createdAt).getTime() + 5 * 60 * 1000;
     return Math.max(0, Math.floor((expireTime - Date.now()) / 1000));
   });
 
   useEffect(() => {
-    const timer = setInterval(() => {
+    expiredNotifiedRef.current = false;
+    const calcRemaining = () => {
       const expireTime = new Date(createdAt).getTime() + 5 * 60 * 1000;
-      const rem = Math.max(0, Math.floor((expireTime - Date.now()) / 1000));
+      return Math.max(0, Math.floor((expireTime - Date.now()) / 1000));
+    };
+
+    if (calcRemaining() <= 0) {
+      expiredNotifiedRef.current = true;
+      const t = setTimeout(() => onExpire?.(), 0);
+      return () => clearTimeout(t);
+    }
+
+    const timer = setInterval(() => {
+      const rem = calcRemaining();
       setTimeLeft(rem);
       if (rem <= 0) {
         clearInterval(timer);
-        onExpire?.();
+        if (!expiredNotifiedRef.current) {
+          expiredNotifiedRef.current = true;
+          onExpire?.();
+        }
       }
     }, 1000);
     return () => clearInterval(timer);
@@ -196,20 +229,26 @@ function PendingCountdown({
 
 function OrderCard({
   order,
+  busyAction,
   onCancel,
+  onRetryPayment,
   onDelete,
   onExpire,
 }: {
   order: Order;
+  busyAction?: "cancelling" | "retrying" | "deleting";
   onCancel?: (orderId: number) => void;
+  onRetryPayment?: (orderId: number) => void;
   onDelete?: (orderId: number) => void;
   onExpire?: () => void;
 }) {
   const cfg = STATUS_CONFIG[order.status] ?? STATUS_CONFIG["COMPLETED"];
   const payMethod = order.payments?.[0]?.method;
   const payLabel =
-    payMethod === "CARD"
+    payMethod === "BANK_CARD" || payMethod === "CARD"
       ? "Thẻ ngân hàng"
+      : payMethod === "EWALLET"
+      ? "Ví điện tử"
       : payMethod === "MOMO"
       ? "Ví MoMo Express"
       : payMethod
@@ -219,9 +258,30 @@ function OrderCard({
   const isReadyStatus = order.status === "READY";
   const isPreparingStatus = order.status === "PREPARING";
   const isPendingStatus = order.status === "PENDING";
-  const isCancelledStatus =
-    order.status === "CANCELLED" || order.status === "PAYMENT_FAILED";
+  const isPaymentFailed = order.status === "PAYMENT_FAILED";
+  const isCancelledStatus = order.status === "CANCELLED";
   const isActiveOrder = isActive(order.status) || isPendingStatus;
+
+  const [isExpired, setIsExpired] = useState(() => {
+    const expireTime = new Date(order.createdAt).getTime() + 5 * 60 * 1000;
+    return Date.now() >= expireTime;
+  });
+
+  useEffect(() => {
+    if (!isPendingStatus && !isPaymentFailed) return;
+    const expireTime = new Date(order.createdAt).getTime() + 5 * 60 * 1000;
+    const remainingMs = expireTime - Date.now();
+    const timer = setTimeout(
+      () => setIsExpired(true),
+      Math.max(0, remainingMs)
+    );
+    return () => clearTimeout(timer);
+  }, [order.createdAt, isPendingStatus, isPaymentFailed]);
+
+  const handleCardExpire = useCallback(() => {
+    setIsExpired(true);
+    onExpire?.();
+  }, [onExpire]);
 
   return (
     <article
@@ -299,14 +359,20 @@ function OrderCard({
                 credit_card
               </span>
               <span>{payLabel}</span>
-              {order.status === "PENDING" && (
+              {(isPendingStatus || isPaymentFailed) && (
                 <div className="flex flex-wrap items-center gap-2">
                   <PendingCountdown
                     createdAt={order.createdAt}
-                    onExpire={onExpire}
+                    onExpire={handleCardExpire}
                   />
-                  <span className="text-amber-800 text-[11px]">
-                    • Đang giữ nguyên liệu tại quầy
+                  <span
+                    className={`text-[11px] ${
+                      isPaymentFailed ? "text-rose-700 font-medium" : "text-amber-800"
+                    }`}
+                  >
+                    {isPaymentFailed
+                      ? "• Thanh toán lỗi • Có thể thử lại trong 5 phút"
+                      : "• Đang giữ nguyên liệu tại quầy"}
                   </span>
                 </div>
               )}
@@ -347,36 +413,57 @@ function OrderCard({
             </span>
           </div>
 
-          {isPendingStatus ? (
-            <div className="flex items-center gap-2">
+          {(isPendingStatus || isPaymentFailed) && !isExpired ? (
+            <div className="flex items-center gap-2 flex-wrap justify-end">
               {onCancel && (
                 <button
                   type="button"
                   onClick={() => onCancel(order.id)}
-                  className="px-3 py-2.5 rounded-xl font-semibold text-xs text-[#504440] hover:text-red-700 bg-[#f3ede9] hover:bg-red-50 border border-transparent hover:border-red-200 transition-all cursor-pointer active:scale-95"
+                  disabled={Boolean(busyAction)}
+                  className="px-3 py-2.5 rounded-xl font-semibold text-xs text-[#504440] hover:text-red-700 bg-[#f3ede9] hover:bg-red-50 border border-transparent hover:border-red-200 transition-all cursor-pointer active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Hủy
+                  {busyAction === "cancelling" ? "Đang hủy..." : "Hủy đơn"}
                 </button>
               )}
-              <Link
-                href={`/checkout?orderId=${order.id}`}
-                className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl font-bold text-[13px] bg-gradient-to-r from-[#845326] to-[#5a3312] hover:from-[#9b612d] hover:to-[#6d3e17] text-[#ffdcc2] border border-[#845326]/50 transition-all active:scale-95 shadow-md shadow-[#2c1810]/20"
-              >
-                <span className="material-symbols-outlined text-base">payments</span>
-                <span>Thanh toán ngay</span>
-              </Link>
+              {isPendingStatus ? (
+                <Link
+                  href={`/checkout?orderId=${order.id}`}
+                  aria-disabled={Boolean(busyAction)}
+                  className={`inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl font-bold text-[13px] bg-gradient-to-r from-[#845326] to-[#5a3312] hover:from-[#9b612d] hover:to-[#6d3e17] text-[#ffdcc2] border border-[#845326]/50 transition-all active:scale-95 shadow-md shadow-[#2c1810]/20 ${
+                    busyAction ? "pointer-events-none opacity-50" : ""
+                  }`}
+                >
+                  <span className="material-symbols-outlined text-base">payments</span>
+                  <span>Thanh toán ngay</span>
+                </Link>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => onRetryPayment?.(order.id)}
+                  disabled={Boolean(busyAction)}
+                  className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl font-bold text-[13px] bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-700 hover:to-amber-700 text-white transition-all cursor-pointer active:scale-95 shadow-md shadow-rose-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <span className="material-symbols-outlined text-base">refresh</span>
+                  <span>
+                    {busyAction === "retrying"
+                      ? "Đang xử lý..."
+                      : "Thử lại thanh toán"}
+                  </span>
+                </button>
+              )}
             </div>
-          ) : isCancelledStatus ? (
+          ) : isCancelledStatus || ((isPendingStatus || isPaymentFailed) && isExpired) ? (
             <div className="flex items-center gap-2">
               {onDelete && (
                 <button
                   type="button"
                   onClick={() => onDelete(order.id)}
-                  className="inline-flex items-center gap-1 px-3 py-2.5 rounded-xl font-semibold text-xs text-[#8C3B32] hover:text-[#6E2822] bg-[#FAF0EE] hover:bg-[#F5E5E2] border border-[#8C3B32]/30 transition-all cursor-pointer active:scale-95 shadow-xs"
-                  title="Xóa đơn hàng này khỏi danh sách hiển thị"
+                  disabled={Boolean(busyAction)}
+                  className="inline-flex items-center gap-1 px-3 py-2.5 rounded-xl font-semibold text-xs text-[#8C3B32] hover:text-[#6E2822] bg-[#FAF0EE] hover:bg-[#F5E5E2] border border-[#8C3B32]/30 transition-all cursor-pointer active:scale-95 shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Xóa vĩnh viễn đơn hàng này khỏi lịch sử"
                 >
                   <span className="material-symbols-outlined text-base">delete</span>
-                  <span>Xóa</span>
+                  <span>{busyAction === "deleting" ? "Đang xóa..." : "Xóa"}</span>
                 </button>
               )}
               <Link
@@ -432,12 +519,31 @@ function OrdersContent() {
     null
   );
   const [cancellingPending, setCancellingPending] = useState(false);
+  const [busyOrderIds, setBusyOrderIds] = useState<
+    Record<number, "cancelling" | "retrying" | "deleting">
+  >({});
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [confirmDeleteOrderId, setConfirmDeleteOrderId] = useState<number | null>(null);
   const [liveToast, setLiveToast] = useState<{
     orderId: number;
     status: string;
     message: string;
   } | null>(null);
   const prevStatusMapRef = useRef<Record<number, string>>({});
+
+  const setOrderBusy = useCallback(
+    (orderId: number, action?: "cancelling" | "retrying" | "deleting") => {
+      setBusyOrderIds((prev) => {
+        if (!action) {
+          const next = { ...prev };
+          delete next[orderId];
+          return next;
+        }
+        return { ...prev, [orderId]: action };
+      });
+    },
+    []
+  );
 
   // Play gentle notification chime when drink status updates to READY
   const playCustomerChime = useCallback(() => {
@@ -467,6 +573,82 @@ function OrdersContent() {
     }
   }, []);
 
+  const applyOrdersList = useCallback(
+    (list: Order[], notifyTransitions: boolean) => {
+      if (notifyTransitions && Object.keys(prevStatusMapRef.current).length > 0) {
+        for (const ord of list) {
+          const prev = prevStatusMapRef.current[ord.id];
+          if (prev && prev !== ord.status) {
+            if (ord.status === "PREPARING") {
+              setSelectedHeroOrderId(ord.id);
+              setLiveToast({
+                orderId: ord.id,
+                status: "PREPARING",
+                message: `☕ Barista đã tiếp nhận Đơn #BL-${ord.id} và đang bắt đầu pha chế!`,
+              });
+            } else if (ord.status === "READY") {
+              playCustomerChime();
+              setSelectedHeroOrderId(ord.id);
+              setLiveToast({
+                orderId: ord.id,
+                status: "READY",
+                message: `🔔 ĐỒ UỐNG ĐÃ PHA XONG! Mời bạn lấy Đơn #BL-${ord.id} tại Kệ Express Bar 04!`,
+              });
+            } else if (ord.status === "COMPLETED") {
+              playCustomerChime();
+              setLiveToast({
+                orderId: ord.id,
+                status: "COMPLETED",
+                message: `✅ Đơn #BL-${ord.id} đã bàn giao thành công. Chúc bạn thưởng thức ngon miệng!`,
+              });
+            } else if (ord.status === "CANCELLED") {
+              setLiveToast({
+                orderId: ord.id,
+                status: "CANCELLED",
+                message: `⚠️ Đơn #BL-${ord.id} đã được hủy tại quầy.`,
+              });
+            }
+          }
+        }
+      }
+
+      const nextMap: Record<number, string> = {};
+      list.forEach((o) => {
+        nextMap[o.id] = o.status;
+      });
+      prevStatusMapRef.current = nextMap;
+
+      // Đồng bộ dọn dẹp brewlite_active_pending_order nếu đơn đã hủy/thanh toán/xóa
+      const activePending = readActivePendingOrder();
+      if (activePending) {
+        const matched = list.find((o) => o.id === activePending.orderId);
+        if (
+          !matched ||
+          (matched.status !== "PENDING" && matched.status !== "PAYMENT_FAILED")
+        ) {
+          clearActivePendingOrder(activePending.orderId);
+        }
+      }
+
+      setOrders(list);
+    },
+    [playCustomerChime]
+  );
+
+  const refreshOrders = useCallback(async () => {
+    try {
+      const res = await apiFetch("/orders/me");
+      if (!res.ok) return;
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        applyOrdersList(data, false);
+      }
+    } catch {
+      // ignore transient refresh failure
+    }
+  }, [applyOrdersList]);
+
+
   // Redirect nếu chưa đăng nhập
   useEffect(() => {
     if (_hasHydrated && !isAuthenticated) {
@@ -478,72 +660,53 @@ function OrdersContent() {
   useEffect(() => {
     if (!isAuthenticated) return;
     let isMounted = true;
+    let stopped = false;
+    let interval: ReturnType<typeof setInterval> | null = null;
 
-    const fetchMyOrders = (isInitial = false) => {
-      apiFetch("/orders/me")
-        .then((res) => (res.ok ? res.json() : []))
-        .then((data: Order[]) => {
-          if (!isMounted) return;
-          const list = Array.isArray(data) ? data : [];
+    const stopPolling = () => {
+      stopped = true;
+      if (interval) {
+        clearInterval(interval);
+        interval = null;
+      }
+    };
 
-          if (Object.keys(prevStatusMapRef.current).length > 0) {
-            for (const ord of list) {
-              const prev = prevStatusMapRef.current[ord.id];
-              if (prev && prev !== ord.status) {
-                if (ord.status === "PREPARING") {
-                  setSelectedHeroOrderId(ord.id);
-                  setLiveToast({
-                    orderId: ord.id,
-                    status: "PREPARING",
-                    message: `☕ Barista đã tiếp nhận Đơn #BL-${ord.id} và đang bắt đầu pha chế!`,
-                  });
-                } else if (ord.status === "READY") {
-                  playCustomerChime();
-                  setSelectedHeroOrderId(ord.id);
-                  setLiveToast({
-                    orderId: ord.id,
-                    status: "READY",
-                    message: `🔔 ĐỒ UỐNG ĐÃ PHA XONG! Mời bạn lấy Đơn #BL-${ord.id} tại Kệ Express Bar 04!`,
-                  });
-                } else if (ord.status === "COMPLETED") {
-                  playCustomerChime();
-                  setLiveToast({
-                    orderId: ord.id,
-                    status: "COMPLETED",
-                    message: `✅ Đơn #BL-${ord.id} đã bàn giao thành công. Chúc bạn thưởng thức ngon miệng!`,
-                  });
-                } else if (ord.status === "CANCELLED") {
-                  setLiveToast({
-                    orderId: ord.id,
-                    status: "CANCELLED",
-                    message: `⚠️ Đơn #BL-${ord.id} đã được hủy tại quầy.`,
-                  });
-                }
-              }
-            }
+    const fetchMyOrders = async (isInitial = false) => {
+      try {
+        const res = await apiFetch("/orders/me");
+        if (!isMounted) return;
+        if (!res.ok) {
+          if (res.status === 401) {
+            stopPolling();
           }
-
-          const nextMap: Record<number, string> = {};
-          list.forEach((o) => {
-            nextMap[o.id] = o.status;
-          });
-          prevStatusMapRef.current = nextMap;
-
-          setOrders(list);
           if (isInitial) setLoading(false);
-        })
-        .catch(() => {
-          if (isInitial && isMounted) setLoading(false);
-        });
+          return;
+        }
+        const data = await res.json();
+        if (!isMounted) return;
+        if (!Array.isArray(data)) {
+          if (isInitial) setLoading(false);
+          return;
+        }
+        applyOrdersList(data, true);
+        if (isInitial) setLoading(false);
+      } catch {
+        if (isInitial && isMounted) setLoading(false);
+      }
     };
 
     fetchMyOrders(true);
-    const interval = setInterval(() => fetchMyOrders(false), 3000);
+    if (!stopped) {
+      interval = setInterval(() => {
+        if (stopped) return;
+        fetchMyOrders(false);
+      }, 3000);
+    }
     return () => {
       isMounted = false;
-      clearInterval(interval);
+      stopPolling();
     };
-  }, [isAuthenticated, playCustomerChime]);
+  }, [isAuthenticated, applyOrdersList]);
 
   // Quản lý danh sách ID đơn hàng bị ẩn (xóa mềm hiển thị)
   const [hiddenOrderIds, setHiddenOrderIds] = useState<number[]>(() => {
@@ -565,36 +728,106 @@ function OrdersContent() {
     }
   };
 
-  // Hủy một đơn nháp PENDING cụ thể
-  const handleCancelSingleOrder = async (orderId: number) => {
+  // Thử lại thanh toán cho đơn PAYMENT_FAILED -> chuyển lại PENDING rồi tới /checkout
+  const handleRetryPayment = async (orderId: number) => {
+    if (busyOrderIds[orderId]) return;
+    setActionError(null);
+    setOrderBusy(orderId, "retrying");
     try {
-      await apiFetch(`/orders/${orderId}/status`, {
+      const res = await apiFetch(`/orders/${orderId}/status`, {
         method: "PATCH",
-        body: JSON.stringify({ status: "CANCELLED" }),
+        body: JSON.stringify({ status: "PENDING" }),
       });
-      const res = await apiFetch("/orders/me");
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data)) setOrders(data);
+      if (!res.ok) {
+        const errMsg = await parseApiError(
+          res,
+          `Không thể thử lại thanh toán đơn #BL-${orderId}`
+        );
+        setActionError(errMsg);
+        await refreshOrders();
+        return;
       }
+      router.push(`/checkout?orderId=${orderId}`);
     } catch {
-      // ignore
+      setActionError("Lỗi kết nối máy chủ khi khởi tạo lại thanh toán.");
+    } finally {
+      setOrderBusy(orderId);
     }
   };
 
-  // Xóa mềm đơn hàng khỏi hiển thị (không xóa DB)
-  const handleDeleteOrder = (orderId: number) => {
-    saveHiddenOrderIds(
-      hiddenOrderIds.includes(orderId)
-        ? hiddenOrderIds
-        : [...hiddenOrderIds, orderId]
-    );
+  // Hủy một đơn PENDING hoặc PAYMENT_FAILED cụ thể
+  const handleCancelSingleOrder = async (orderId: number) => {
+    if (busyOrderIds[orderId]) return;
+    setActionError(null);
+    setOrderBusy(orderId, "cancelling");
+    try {
+      const res = await apiFetch(`/orders/${orderId}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: "CANCELLED" }),
+      });
+      if (!res.ok) {
+        const errMsg = await parseApiError(
+          res,
+          `Không thể hủy đơn #BL-${orderId}`
+        );
+        setActionError(errMsg);
+        await refreshOrders();
+        return;
+      }
+      clearActivePendingOrder(orderId);
+      await refreshOrders();
+    } catch {
+      setActionError("Lỗi kết nối máy chủ khi hủy đơn hàng.");
+    } finally {
+      setOrderBusy(orderId);
+    }
   };
 
-  // Dọn dẹp tất cả các đơn đã hủy (xóa mềm hiển thị)
+  // Mở hộp thoại xác nhận trước khi xóa vĩnh viễn đơn hàng trên máy chủ
+  const handleDeleteOrder = (orderId: number) => {
+    if (busyOrderIds[orderId]) return;
+    setConfirmDeleteOrderId(orderId);
+  };
+
+  // Thực thi DELETE /orders/:id sau khi người dùng xác nhận rõ ràng
+  const confirmDeleteOrder = async () => {
+    if (confirmDeleteOrderId === null) return;
+    const orderId = confirmDeleteOrderId;
+    if (busyOrderIds[orderId]) return;
+    setActionError(null);
+    setOrderBusy(orderId, "deleting");
+    try {
+      const res = await apiFetch(`/orders/${orderId}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const errMsg = await parseApiError(
+          res,
+          `Không thể xóa đơn #BL-${orderId}`
+        );
+        setActionError(errMsg);
+        setConfirmDeleteOrderId(null);
+        return;
+      }
+      setOrders((prev) => prev.filter((o) => o.id !== orderId));
+      delete prevStatusMapRef.current[orderId];
+      if (hiddenOrderIds.includes(orderId)) {
+        saveHiddenOrderIds(hiddenOrderIds.filter((id) => id !== orderId));
+      }
+      clearActivePendingOrder(orderId);
+      setConfirmDeleteOrderId(null);
+    } catch {
+      setActionError("Lỗi kết nối máy chủ khi xóa đơn hàng.");
+      setConfirmDeleteOrderId(null);
+    } finally {
+      setOrderBusy(orderId);
+    }
+  };
+
+  // Dọn dẹp tất cả các đơn đã hủy (chỉ áp dụng cho CANCELLED, không gom PAYMENT_FAILED)
   const handleCleanCancelledOrders = () => {
     const cancelledIds = orders
-      .filter((o) => o.status === "CANCELLED" || o.status === "PAYMENT_FAILED")
+      .filter((o) => o.status === "CANCELLED")
       .map((o) => o.id);
     if (!cancelledIds.length) return;
     saveHiddenOrderIds(
@@ -609,25 +842,39 @@ function OrdersContent() {
 
   // Hủy toàn bộ đơn nháp PENDING dở dang (hoàn lại tồn kho & làm sạch danh sách)
   const handleCancelPendingOrders = async () => {
-    if (!pendingOrders.length) return;
+    if (!pendingOrders.length || cancellingPending) return;
     setCancellingPending(true);
+    setActionError(null);
+    const targetIds = pendingOrders.map((p) => p.id);
+    targetIds.forEach((id) => setOrderBusy(id, "cancelling"));
     try {
-      await Promise.all(
-        pendingOrders.map((p) =>
-          apiFetch(`/orders/${p.id}/status`, {
+      const results = await Promise.all(
+        targetIds.map(async (id) => {
+          const res = await apiFetch(`/orders/${id}/status`, {
             method: "PATCH",
             body: JSON.stringify({ status: "CANCELLED" }),
-          })
-        )
+          });
+          if (!res.ok) {
+            return { id, error: await parseApiError(res, `Đơn #BL-${id}`) };
+          }
+          return { id, error: null };
+        })
       );
-      const res = await apiFetch("/orders/me");
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data)) setOrders(data);
+      const errors = results
+        .map((r) => r.error)
+        .filter((msg): msg is string => Boolean(msg));
+      if (errors.length > 0) {
+        setActionError(`Một số đơn chờ không thể hủy: ${errors.join("; ")}`);
       }
+      const succeededIds = results.filter((r) => !r.error).map((r) => r.id);
+      if (succeededIds.length > 0) {
+        clearActivePendingOrder(succeededIds);
+      }
+      await refreshOrders();
     } catch {
-      // ignore
+      setActionError("Lỗi kết nối máy chủ khi hủy các đơn chờ thanh toán.");
     } finally {
+      targetIds.forEach((id) => setOrderBusy(id));
       setCancellingPending(false);
     }
   };
@@ -662,8 +909,8 @@ function OrdersContent() {
     if (filter === "active")
       return isActive(o.status) || o.status === "PENDING";
     if (filter === "completed") return o.status === "COMPLETED";
-    if (filter === "cancelled")
-      return o.status === "CANCELLED" || o.status === "PAYMENT_FAILED";
+    if (filter === "failed") return o.status === "PAYMENT_FAILED";
+    if (filter === "cancelled") return o.status === "CANCELLED";
     return true;
   });
 
@@ -689,12 +936,16 @@ function OrdersContent() {
       count: visibleOrders.filter((o) => o.status === "COMPLETED").length,
     },
     {
+      key: "failed",
+      label: "Thanh toán lỗi",
+      icon: "error_outline",
+      count: visibleOrders.filter((o) => o.status === "PAYMENT_FAILED").length,
+    },
+    {
       key: "cancelled",
       label: "Đã hủy",
       icon: "cancel",
-      count: visibleOrders.filter(
-        (o) => o.status === "CANCELLED" || o.status === "PAYMENT_FAILED"
-      ).length,
+      count: visibleOrders.filter((o) => o.status === "CANCELLED").length,
     },
   ];
 
@@ -738,6 +989,29 @@ function OrdersContent() {
   return (
     <div className="min-h-screen bg-[#fef8f4] text-[#1d1b19] flex flex-col font-body">
       <Header cartCount={0} activeTab="orders" />
+
+      {/* ── FLOATING ACTION ERROR ALERT ── */}
+      {actionError && (
+        <div
+          role="alert"
+          className="fixed top-20 right-6 z-50 max-w-md px-5 py-4 rounded-2xl shadow-2xl border border-rose-300 bg-rose-50 text-rose-900 flex items-start gap-3"
+        >
+          <span className="material-symbols-outlined text-2xl text-rose-600 shrink-0">
+            error
+          </span>
+          <div className="flex-1 text-xs font-semibold leading-relaxed">
+            {actionError}
+          </div>
+          <button
+            type="button"
+            onClick={() => setActionError(null)}
+            className="text-rose-600 hover:text-rose-900 font-bold text-xs cursor-pointer"
+            aria-label="Đóng thông báo lỗi"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* ── FLOATING LIVE NOTIFICATION TOAST FROM BARISTA ── */}
       {liveToast && (
@@ -1234,10 +1508,7 @@ function OrdersContent() {
                       </span>{" "}
                       giao dịch
                     </span>
-                    {visibleOrders.some(
-                      (o) =>
-                        o.status === "CANCELLED" || o.status === "PAYMENT_FAILED"
-                    ) && (
+                    {visibleOrders.some((o) => o.status === "CANCELLED") && (
                       <button
                         type="button"
                         onClick={handleCleanCancelledOrders}
@@ -1251,11 +1522,7 @@ function OrdersContent() {
                       </button>
                     )}
                     {hiddenOrderIds.length > 0 &&
-                      !visibleOrders.some(
-                        (o) =>
-                          o.status === "CANCELLED" ||
-                          o.status === "PAYMENT_FAILED"
-                      ) && (
+                      !visibleOrders.some((o) => o.status === "CANCELLED") && (
                         <button
                           type="button"
                           onClick={handleRestoreHiddenOrders}
@@ -1309,13 +1576,11 @@ function OrdersContent() {
                       <OrderCard
                         key={order.id}
                         order={order}
+                        busyAction={busyOrderIds[order.id]}
                         onCancel={handleCancelSingleOrder}
+                        onRetryPayment={handleRetryPayment}
                         onDelete={handleDeleteOrder}
-                        onExpire={() => {
-                          apiFetch("/orders/me")
-                            .then((r) => (r.ok ? r.json() : []))
-                            .then((d) => Array.isArray(d) && setOrders(d));
-                        }}
+                        onExpire={refreshOrders}
                       />
                     ))}
                   </div>
@@ -1325,6 +1590,53 @@ function OrdersContent() {
           )}
         </div>
       </main>
+
+      {confirmDeleteOrderId !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-2xl border border-[#e7e1dd] flex flex-col gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-[#FAF0EE] flex items-center justify-center text-[#8C3B32] shrink-0">
+                <span className="material-symbols-outlined text-xl">delete</span>
+              </div>
+              <div>
+                <h4 className="font-headline font-bold text-[15px] text-[#1d1b19]">
+                  Xác nhận xóa đơn hàng
+                </h4>
+                <p className="text-[11px] text-[#504440]">
+                  Thao tác này sẽ xóa vĩnh viễn khỏi lịch sử
+                </p>
+              </div>
+            </div>
+
+            <p className="text-[13px] text-[#504440] leading-relaxed">
+              Bạn có chắc chắn muốn xóa đơn hàng{" "}
+              <strong className="text-[#2c1810]">#BL-{confirmDeleteOrderId}</strong>{" "}
+              không? Thao tác này không thể hoàn tác.
+            </p>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-[#f3ede9]">
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteOrderId(null)}
+                disabled={Boolean(busyOrderIds[confirmDeleteOrderId])}
+                className="px-4 py-2 text-[13px] font-medium text-[#504440] hover:text-[#1d1b19] hover:bg-[#f3ede9] rounded-xl transition-colors cursor-pointer disabled:opacity-50"
+              >
+                Giữ lại
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteOrder}
+                disabled={Boolean(busyOrderIds[confirmDeleteOrderId])}
+                className="px-4 py-2 text-[13px] font-bold text-white bg-[#8C3B32] hover:bg-[#6E2822] rounded-xl transition-colors shadow-xs cursor-pointer active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {busyOrderIds[confirmDeleteOrderId] === "deleting"
+                  ? "Đang xóa..."
+                  : "Xác nhận xóa"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <Footer />
     </div>

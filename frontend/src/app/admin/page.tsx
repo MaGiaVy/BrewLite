@@ -4,7 +4,7 @@ import RevenueChartSection from "./components/RevenueChartSection";
 import StaffManagementSection, { StaffUser } from "./components/StaffManagementSection";
 import CustomerManagementSection, { CustomerUser } from "./components/CustomerManagementSection";
 
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import BrewLiteLogo from "../components/BrewLiteLogo";
@@ -125,6 +125,23 @@ function getDefaultMaxDiscount(code: string, discountPercent: number): number {
   return 100000;
 }
 
+const ORDER_STATUS_BADGE_STYLES: Record<string, string> = {
+  PENDING: "bg-[#EFF6FF] text-[#1D4ED8] border border-[#BFDBFE]",
+  PAYMENT_FAILED: "bg-[#FFF7ED] text-[#C2410C] border border-[#FDBA74]",
+  PAID: "bg-[#FEF3C7] text-[#B45309] border border-[#FDE68A]",
+  PREPARING: "bg-[#FEF9C3] text-[#854D0E] border border-[#FDE047]",
+  READY: "bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0]",
+  COMPLETED: "bg-[#DCFCE7] text-[#166534] border border-[#BBF7D0]",
+  CANCELLED: "bg-[#FEE2E2] text-[#991B1B] border border-[#FECACA]",
+};
+
+function getOrderStatusBadgeClass(status: string): string {
+  return (
+    ORDER_STATUS_BADGE_STYLES[status] ||
+    "bg-[#F3ECE4] text-[#7A6A5E] border border-[#E6DDD5]"
+  );
+}
+
 interface OrderItemDetail {
   id: number;
   productId: number;
@@ -225,7 +242,11 @@ export default function AdminPortalPage() {
     Record<number, { basePrice: string; description: string; sizeUpchargeM: string; sizeUpchargeL: string }>
   >({});
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
+  const hasLoadedOnceRef = useRef<boolean>(false);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const [toastVariant, setToastVariant] = useState<"default" | "error">("default");
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ─── 1. PRODUCT MANAGEMENT STATES ──────────────────────────────────────────
   const [productSearch, setProductSearch] = useState<string>("");
@@ -361,7 +382,14 @@ export default function AdminPortalPage() {
   const [orderSearchQuery, setOrderSearchQuery] = useState<string>("");
   const [selectedOrderDetail, setSelectedOrderDetail] =
     useState<OrderSummary | null>(null);
-  const [updatingOrderId, setUpdatingOrderId] = useState<number | null>(null);
+  const [pendingCancelOrder, setPendingCancelOrder] =
+    useState<OrderSummary | null>(null);
+  const [cancelModalError, setCancelModalError] = useState<{
+    message: string;
+    isStale: boolean;
+  } | null>(null);
+  const [orderActionError, setOrderActionError] = useState<string | null>(null);
+  const [updatingOrderIds, setUpdatingOrderIds] = useState<Record<number, boolean>>({});
 
   // Auth & Role Guard
   useEffect(() => {
@@ -374,14 +402,31 @@ export default function AdminPortalPage() {
     }
   }, [_hasHydrated, isAuthenticated, user, router]);
 
-  const showToast = (msg: string) => {
+  const showToast = (msg: string, variant: "default" | "error" = "default") => {
+    if (toastTimerRef.current) {
+      clearTimeout(toastTimerRef.current);
+    }
     setToastMsg(msg);
-    setTimeout(() => setToastMsg(null), 3800);
+    setToastVariant(variant);
+    toastTimerRef.current = setTimeout(
+      () => setToastMsg(null),
+      variant === "error" ? 4800 : 3800
+    );
   };
 
-  const fetchAdminData = useCallback(async () => {
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    };
+  }, []);
+
+  const fetchAdminData = useCallback(async (quiet = false) => {
     if (!_hasHydrated || !isAuthenticated || user?.role !== "ADMIN") return;
-    setIsLoading(true);
+    if (quiet || hasLoadedOnceRef.current) {
+      setIsRefreshing(true);
+    } else {
+      setIsLoading(true);
+    }
     try {
       const [ingRes, recRes, prodRes, dashRes, logsRes, vouchersRes, staffRes, custRes] = await Promise.all([
         apiFetch("/inventory/ingredients", { cache: "no-store" }),
@@ -475,9 +520,16 @@ export default function AdminPortalPage() {
     } catch {
       showToast("Không thể tải dữ liệu quản trị từ máy chủ");
     } finally {
+      hasLoadedOnceRef.current = true;
       setIsLoading(false);
+      setIsRefreshing(false);
     }
   }, [_hasHydrated, isAuthenticated, user]);
+
+  const refreshAdminQuietly = useCallback(
+    () => fetchAdminData(true),
+    [fetchAdminData]
+  );
 
   useEffect(() => {
     fetchAdminData();
@@ -612,7 +664,7 @@ export default function AdminPortalPage() {
 
       const savedProduct = await res.json().catch(() => null);
       setIsProductModalOpen(false);
-      await fetchAdminData();
+      await fetchAdminData(true);
 
       if (!editingProduct && savedProduct) {
         showToast(
@@ -663,7 +715,7 @@ export default function AdminPortalPage() {
         delete next[prod.id];
         return next;
       });
-      await fetchAdminData();
+      await fetchAdminData(true);
     } catch (err: unknown) {
       showToast(err instanceof Error ? err.message : "Lỗi cập nhật nhanh");
     }
@@ -683,7 +735,7 @@ export default function AdminPortalPage() {
       });
       if (!res.ok) throw new Error("Không thể lưu cấu hình giá Size");
       showToast("✅ Đã cập nhật bảng giá phụ thu Size S / M / L toàn cửa hàng!");
-      await fetchAdminData();
+      await fetchAdminData(true);
     } catch (err: unknown) {
       showToast(err instanceof Error ? err.message : "Lỗi lưu giá Size");
     } finally {
@@ -723,7 +775,7 @@ export default function AdminPortalPage() {
             : `✅ Đã mở bán lại bình thường cho "${prod.name}"`
         );
       }
-      await fetchAdminData();
+      await fetchAdminData(true);
     } catch (err: unknown) {
       showToast(err instanceof Error ? err.message : "Đã xảy ra lỗi");
     }
@@ -750,7 +802,7 @@ export default function AdminPortalPage() {
           : `🗑️ Đã xóa nguyên vật liệu "${deleteTarget.name}" khỏi kho`
       );
       setDeleteTarget(null);
-      await fetchAdminData();
+      await fetchAdminData(true);
     } catch (err: unknown) {
       showToast(err instanceof Error ? err.message : "Không thể xóa mục này");
     } finally {
@@ -835,7 +887,7 @@ export default function AdminPortalPage() {
         );
       }
       setSelectedIngredient(null);
-      await fetchAdminData();
+      await fetchAdminData(true);
     } catch (err: unknown) {
       showToast(err instanceof Error ? err.message : "Đã xảy ra lỗi");
     } finally {
@@ -902,7 +954,7 @@ export default function AdminPortalPage() {
         delete next[ing.id];
         return next;
       });
-      await fetchAdminData();
+      await fetchAdminData(true);
     } catch (err: unknown) {
       showToast(err instanceof Error ? err.message : "Lỗi cập nhật giá nhập");
     }
@@ -953,7 +1005,7 @@ export default function AdminPortalPage() {
           : `✅ Đã thêm nguyên liệu mới "${ingName.trim()}" vào kho`
       );
       setIsIngFormOpen(false);
-      await fetchAdminData();
+      await fetchAdminData(true);
     } catch (err: unknown) {
       showToast(err instanceof Error ? err.message : "Đã xảy ra lỗi");
     } finally {
@@ -997,7 +1049,7 @@ export default function AdminPortalPage() {
         `✅ Đã cập nhật định lượng Size ${bomSelectedSize} cho món "${bomModalProduct.name}"`
       );
       setBomModalProduct(null);
-      await fetchAdminData();
+      await fetchAdminData(true);
     } catch (err: unknown) {
       showToast(err instanceof Error ? err.message : "Lỗi cập nhật BOM");
     } finally {
@@ -1030,7 +1082,7 @@ export default function AdminPortalPage() {
         delete next[recipe.id];
         return next;
       });
-      await fetchAdminData();
+      await fetchAdminData(true);
     } catch (err: unknown) {
       showToast(err instanceof Error ? err.message : "Lỗi lưu định lượng");
     }
@@ -1049,7 +1101,7 @@ export default function AdminPortalPage() {
         throw new Error("Không thể xóa dòng công thức");
       }
       showToast(`🗑️ Đã gỡ "${ingName}" (Size ${size}) khỏi công thức`);
-      await fetchAdminData();
+      await fetchAdminData(true);
     } catch (err: unknown) {
       showToast(err instanceof Error ? err.message : "Lỗi khi xóa công thức");
     }
@@ -1105,7 +1157,7 @@ export default function AdminPortalPage() {
         delete next[tr.id];
         return next;
       });
-      await fetchAdminData();
+      await fetchAdminData(true);
     } catch (err: unknown) {
       showToast(err instanceof Error ? err.message : "Lỗi cập nhật Topping");
     }
@@ -1140,7 +1192,7 @@ export default function AdminPortalPage() {
       setNewTopCode("");
       setNewTopName("");
       setNewTopSubtext("");
-      await fetchAdminData();
+      await fetchAdminData(true);
     } catch (err: unknown) {
       showToast(err instanceof Error ? err.message : "Lỗi thêm Topping");
     } finally {
@@ -1155,7 +1207,7 @@ export default function AdminPortalPage() {
       });
       if (!res.ok) throw new Error("Không thể xóa Topping");
       showToast(`🗑️ Đã xóa Topping "${tr.toppingName}"`);
-      await fetchAdminData();
+      await fetchAdminData(true);
     } catch (err: unknown) {
       showToast(err instanceof Error ? err.message : "Lỗi xóa Topping");
     }
@@ -1195,7 +1247,7 @@ export default function AdminPortalPage() {
       setNewVoucherCode("");
       setNewVoucherDesc("");
       setNewVoucherMaxDiscount("25000");
-      await fetchAdminData();
+      await fetchAdminData(true);
     } catch (err: unknown) {
       showToast(err instanceof Error ? err.message : "Lỗi tạo mã giảm giá");
     } finally {
@@ -1233,7 +1285,7 @@ export default function AdminPortalPage() {
         delete next[v.id];
         return next;
       });
-      await fetchAdminData();
+      await fetchAdminData(true);
     } catch (err: unknown) {
       showToast(err instanceof Error ? err.message : "Lỗi cập nhật mã giảm giá");
     }
@@ -1246,7 +1298,7 @@ export default function AdminPortalPage() {
       });
       if (!res.ok) throw new Error("Không thể xóa mã giảm giá");
       showToast(`🗑️ Đã xóa mã giảm giá ${v.code}`);
-      await fetchAdminData();
+      await fetchAdminData(true);
     } catch (err: unknown) {
       showToast(err instanceof Error ? err.message : "Lỗi xóa mã giảm giá");
     }
@@ -1255,9 +1307,12 @@ export default function AdminPortalPage() {
   // ─── ORDER MANAGEMENT HANDLERS ─────────────────────────────────────────────
   const handleAdminOrderStatusChange = async (
     orderId: number,
-    nextStatus: string
-  ) => {
-    setUpdatingOrderId(orderId);
+    nextStatus: string,
+    onFailure?: (message: string, isStale: boolean) => void
+  ): Promise<boolean> => {
+    if (updatingOrderIds[orderId]) return false;
+    setUpdatingOrderIds((prev) => ({ ...prev, [orderId]: true }));
+    setOrderActionError(null);
     try {
       const res = await apiFetch(`/orders/${orderId}/status`, {
         method: "PATCH",
@@ -1265,7 +1320,29 @@ export default function AdminPortalPage() {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err.message || "Không thể chuyển trạng thái đơn hàng");
+        const backendMsg = Array.isArray(err?.message)
+          ? err.message.join(", ")
+          : typeof err?.message === "string"
+          ? err.message
+          : "";
+        const displayMsg =
+          res.status === 409
+            ? `Xung đột trạng thái (Đơn #${orderId}): ${
+                backendMsg ||
+                "Đơn hàng đã thay đổi bởi tiến trình khác. Đã đồng bộ lại danh sách."
+              }`
+            : res.status === 400
+            ? `Thao tác không hợp lệ (Đơn #${orderId}): ${
+                backendMsg ||
+                "Trạng thái hiện tại không cho phép chuyển tiếp. Đã đồng bộ lại danh sách."
+              }`
+            : backendMsg ||
+              `Không thể chuyển trạng thái đơn hàng (HTTP ${res.status})`;
+        setOrderActionError(displayMsg);
+        showToast(displayMsg, "error");
+        await fetchAdminData(true);
+        onFailure?.(displayMsg, res.status === 409 || res.status === 400);
+        return false;
       }
       showToast(
         nextStatus === "CANCELLED"
@@ -1275,11 +1352,35 @@ export default function AdminPortalPage() {
       if (selectedOrderDetail && selectedOrderDetail.id === orderId) {
         setSelectedOrderDetail({ ...selectedOrderDetail, status: nextStatus });
       }
-      await fetchAdminData();
+      await fetchAdminData(true);
+      return true;
     } catch (err: unknown) {
-      showToast(err instanceof Error ? err.message : "Lỗi cập nhật đơn hàng");
+      const msg =
+        err instanceof Error ? err.message : "Lỗi cập nhật đơn hàng";
+      setOrderActionError(msg);
+      showToast(msg, "error");
+      onFailure?.(msg, false);
+      return false;
     } finally {
-      setUpdatingOrderId(null);
+      setUpdatingOrderIds((prev) => {
+        const next = { ...prev };
+        delete next[orderId];
+        return next;
+      });
+    }
+  };
+
+  const handleConfirmAdminCancelOrder = async () => {
+    if (!pendingCancelOrder) return;
+    setCancelModalError(null);
+    const ok = await handleAdminOrderStatusChange(
+      pendingCancelOrder.id,
+      "CANCELLED",
+      (message, isStale) => setCancelModalError({ message, isStale })
+    );
+    if (ok) {
+      setPendingCancelOrder(null);
+      setCancelModalError(null);
     }
   };
 
@@ -1601,22 +1702,39 @@ export default function AdminPortalPage() {
               </button>
             )}
             <button
-              onClick={fetchAdminData}
-              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#F3ECE4] hover:bg-[#E6DDD5] text-xs font-bold text-[#2C1E18] transition-colors cursor-pointer"
+              type="button"
+              disabled={isRefreshing}
+              onClick={() => void fetchAdminData(true)}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#F3ECE4] hover:bg-[#E6DDD5] text-xs font-bold text-[#2C1E18] transition-colors cursor-pointer disabled:opacity-60"
             >
-              <span className="material-symbols-outlined text-[16px]">
+              <span
+                className={`material-symbols-outlined text-[16px] ${
+                  isRefreshing ? "animate-spin" : ""
+                }`}
+              >
                 refresh
               </span>
-              Làm mới dữ liệu
+              {isRefreshing ? "Đang làm mới..." : "Làm mới dữ liệu"}
             </button>
           </div>
         </header>
 
         {/* Toast Notification */}
         {toastMsg && (
-          <div className="fixed bottom-6 right-6 z-50 bg-[#2C1810] text-white px-5 py-3.5 rounded-2xl shadow-2xl border border-[#9E5A2B] flex items-center gap-3 animate-bounce">
-            <span className="material-symbols-outlined text-[#FEB785]">
-              notifications_active
+          <div
+            role={toastVariant === "error" ? "alert" : "status"}
+            className={`fixed bottom-6 right-6 z-50 px-5 py-3.5 rounded-2xl shadow-2xl border flex items-center gap-3 max-w-md ${
+              toastVariant === "error"
+                ? "bg-[#991B1B] text-white border-[#FECACA]"
+                : "bg-[#2C1810] text-white border-[#9E5A2B] animate-bounce"
+            }`}
+          >
+            <span
+              className={`material-symbols-outlined ${
+                toastVariant === "error" ? "text-[#FECACA]" : "text-[#FEB785]"
+              }`}
+            >
+              {toastVariant === "error" ? "error" : "notifications_active"}
             </span>
             <span className="text-sm font-semibold">{toastMsg}</span>
           </div>
@@ -3514,6 +3632,8 @@ export default function AdminPortalPage() {
                     />
                     {[
                       { id: "ALL", label: "Tất cả" },
+                      { id: "PENDING", label: "Chờ thanh toán" },
+                      { id: "PAYMENT_FAILED", label: "Thanh toán lỗi" },
                       { id: "PAID", label: "Chờ pha (PAID)" },
                       { id: "PREPARING", label: "Đang pha" },
                       { id: "READY", label: "Chờ lấy" },
@@ -3534,6 +3654,28 @@ export default function AdminPortalPage() {
                     ))}
                   </div>
                 </div>
+
+                {orderActionError && (
+                  <div
+                    role="alert"
+                    className="mx-5 mt-4 px-4 py-3 rounded-2xl bg-[#FEF2F2] border border-[#FECACA] text-[#991B1B] flex items-center justify-between gap-3"
+                  >
+                    <div className="flex items-center gap-2 text-xs font-semibold">
+                      <span className="material-symbols-outlined text-lg shrink-0">
+                        warning
+                      </span>
+                      <span>{orderActionError}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setOrderActionError(null)}
+                      className="w-7 h-7 rounded-lg bg-white/80 hover:bg-white text-[#991B1B] flex items-center justify-center text-xs font-bold shrink-0 cursor-pointer"
+                      aria-label="Đóng thông báo lỗi đơn hàng"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                )}
 
                 <div className="overflow-x-auto">
                   <table className="w-full text-left border-collapse">
@@ -3595,14 +3737,9 @@ export default function AdminPortalPage() {
                             </td>
                             <td className="py-3.5 px-5">
                               <span
-                                className={`px-2.5 py-1 rounded-full text-[11px] font-bold ${
-                                  ord.status === "COMPLETED"
-                                    ? "bg-[#DCFCE7] text-[#166534]"
-                                    : ord.status === "CANCELLED" ||
-                                      ord.status === "PAYMENT_FAILED"
-                                    ? "bg-[#FEE2E2] text-[#991B1B]"
-                                    : "bg-[#FEF3C7] text-[#B45309]"
-                                }`}
+                                className={`px-2.5 py-1 rounded-full text-[11px] font-bold whitespace-nowrap ${getOrderStatusBadgeClass(
+                                  ord.status
+                                )}`}
                               >
                                 {ord.status}
                               </span>
@@ -3623,37 +3760,38 @@ export default function AdminPortalPage() {
                                 </button>
 
                                 {ord.status === "PAID" && (
-                                  <>
-                                    <button
-                                      disabled={updatingOrderId === ord.id}
-                                      onClick={() =>
-                                        handleAdminOrderStatusChange(
-                                          ord.id,
-                                          "PREPARING"
-                                        )
-                                      }
-                                      className="px-2.5 py-1.5 rounded-lg bg-[#9E5A2B] hover:bg-[#7D4620] text-white text-xs font-bold cursor-pointer disabled:opacity-50"
-                                    >
-                                      Nhận pha
-                                    </button>
-                                    <button
-                                      disabled={updatingOrderId === ord.id}
-                                      onClick={() =>
-                                        handleAdminOrderStatusChange(
-                                          ord.id,
-                                          "CANCELLED"
-                                        )
-                                      }
-                                      className="px-2.5 py-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-[#991B1B] text-xs font-bold cursor-pointer disabled:opacity-50"
-                                    >
-                                      Hủy & Hoàn kho
-                                    </button>
-                                  </>
+                                  <button
+                                    disabled={Boolean(updatingOrderIds[ord.id])}
+                                    onClick={() =>
+                                      handleAdminOrderStatusChange(
+                                        ord.id,
+                                        "PREPARING"
+                                      )
+                                    }
+                                    className="px-2.5 py-1.5 rounded-lg bg-[#9E5A2B] hover:bg-[#7D4620] text-white text-xs font-bold cursor-pointer disabled:opacity-50"
+                                  >
+                                    Nhận pha
+                                  </button>
+                                )}
+
+                                {(ord.status === "PENDING" ||
+                                  ord.status === "PAYMENT_FAILED" ||
+                                  ord.status === "PAID") && (
+                                  <button
+                                    disabled={Boolean(updatingOrderIds[ord.id])}
+                                    onClick={() => {
+                                      setCancelModalError(null);
+                                      setPendingCancelOrder(ord);
+                                    }}
+                                    className="px-2.5 py-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-[#991B1B] text-xs font-bold cursor-pointer disabled:opacity-50"
+                                  >
+                                    Hủy & Hoàn kho
+                                  </button>
                                 )}
 
                                 {ord.status === "PREPARING" && (
                                   <button
-                                    disabled={updatingOrderId === ord.id}
+                                    disabled={Boolean(updatingOrderIds[ord.id])}
                                     onClick={() =>
                                       handleAdminOrderStatusChange(
                                         ord.id,
@@ -3668,7 +3806,7 @@ export default function AdminPortalPage() {
 
                                 {ord.status === "READY" && (
                                   <button
-                                    disabled={updatingOrderId === ord.id}
+                                    disabled={Boolean(updatingOrderIds[ord.id])}
                                     onClick={() =>
                                       handleAdminOrderStatusChange(
                                         ord.id,
@@ -3699,7 +3837,7 @@ export default function AdminPortalPage() {
             <StaffManagementSection
               staffList={staffList}
               currentUserId={user?.id}
-              onRefresh={fetchAdminData}
+              onRefresh={refreshAdminQuietly}
               showToast={showToast}
               apiFetch={apiFetch}
             />
@@ -3712,7 +3850,7 @@ export default function AdminPortalPage() {
             <CustomerManagementSection
               customers={customerList}
               staffList={staffList}
-              onRefresh={fetchAdminData}
+              onRefresh={refreshAdminQuietly}
               showToast={showToast}
               apiFetch={apiFetch}
             />
@@ -4774,7 +4912,11 @@ export default function AdminPortalPage() {
             </div>
 
             <div className="flex items-center justify-between pt-4 mt-4 border-t border-[#E6DDD5]">
-              <span className="px-3 py-1 rounded-full text-xs font-bold bg-[#FAF6F0] border border-[#E6DDD5]">
+              <span
+                className={`px-3 py-1 rounded-full text-xs font-bold ${getOrderStatusBadgeClass(
+                  selectedOrderDetail.status
+                )}`}
+              >
                 Trạng thái: {selectedOrderDetail.status}
               </span>
               <button
@@ -4783,6 +4925,125 @@ export default function AdminPortalPage() {
               >
                 Đóng
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          MODAL 8: CONFIRM CANCEL ORDER & STOCK/VOUCHER/LOYALTY REVERSAL
+         ===================================================================== */}
+      {pendingCancelOrder && (
+        <div className="fixed inset-0 z-50 bg-black/55 backdrop-blur-xs flex items-center justify-center p-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="admin-cancel-order-title"
+            className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-red-200"
+          >
+            <div className="flex items-start gap-3">
+              <div className="w-11 h-11 rounded-2xl bg-[#FEE2E2] text-[#991B1B] flex items-center justify-center shrink-0">
+                <span className="material-symbols-outlined text-[24px]">
+                  warning
+                </span>
+              </div>
+              <div>
+                <span className="text-[11px] font-mono font-bold uppercase text-[#991B1B]">
+                  Xác nhận hủy đơn hàng
+                </span>
+                <h3
+                  id="admin-cancel-order-title"
+                  className="font-headline text-lg font-extrabold text-[#2C1E18]"
+                >
+                  Hủy &amp; Hoàn kho đơn #{pendingCancelOrder.id}?
+                </h3>
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[#7A6A5E]">
+                  <span
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${getOrderStatusBadgeClass(
+                      pendingCancelOrder.status
+                    )}`}
+                  >
+                    {pendingCancelOrder.status}
+                  </span>
+                  <span>
+                    • {pendingCancelOrder.totalAmount.toLocaleString("vi-VN")}đ
+                  </span>
+                  {pendingCancelOrder.user?.fullName && (
+                    <span>• {pendingCancelOrder.user.fullName}</span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="my-4 p-3.5 rounded-2xl bg-[#FEF2F2] border border-red-200 space-y-1.5 text-xs text-[#991B1B]">
+              <p className="font-bold">
+                Các tác động hoàn trả khi chuyển sang CANCELLED:
+              </p>
+              <p>
+                • <strong>Hoàn kho nguyên vật liệu:</strong> Toàn bộ nguyên liệu
+                BOM &amp; Topping đã giữ/trừ cho đơn #{pendingCancelOrder.id} sẽ
+                được hoàn trả vào kho.
+              </p>
+              <p>
+                • <strong>Hoàn lại Voucher:</strong> Hoàn trả mã giảm giá{" "}
+                {pendingCancelOrder.discountCode
+                  ? `(${pendingCancelOrder.discountCode}) `
+                  : ""}
+                nếu đơn có áp dụng.
+              </p>
+              {pendingCancelOrder.status === "PAID" ? (
+                <p>
+                  • <strong>Thu hồi điểm Loyalty:</strong> Trừ lại điểm thưởng
+                  khách đã nhận khi thanh toán đơn PAID (
+                  {Math.floor(
+                    pendingCancelOrder.totalAmount / 1000
+                  ).toLocaleString("vi-VN")}{" "}
+                  điểm).
+                </p>
+              ) : (
+                <p>
+                  • <strong>Điểm Loyalty:</strong> Đơn chưa hoàn tất thanh toán
+                  ({pendingCancelOrder.status}) nên không phát sinh thu hồi điểm
+                  thưởng.
+                </p>
+              )}
+            </div>
+
+            {cancelModalError && (
+              <div
+                role="alert"
+                className="mb-4 p-3 rounded-2xl bg-[#FEF2F2] border border-red-200 text-xs font-semibold text-[#991B1B]"
+              >
+                {cancelModalError.message}
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                disabled={Boolean(updatingOrderIds[pendingCancelOrder.id])}
+                onClick={() => {
+                  setPendingCancelOrder(null);
+                  setCancelModalError(null);
+                }}
+                className="px-4 py-2.5 rounded-xl bg-[#F3ECE4] text-xs font-bold text-[#7A6A5E] cursor-pointer disabled:opacity-50"
+              >
+                {cancelModalError?.isStale ? "Đóng" : "Giữ lại"}
+              </button>
+              {!cancelModalError?.isStale && (
+                <button
+                  type="button"
+                  disabled={Boolean(updatingOrderIds[pendingCancelOrder.id])}
+                  onClick={handleConfirmAdminCancelOrder}
+                  className="px-5 py-2.5 rounded-xl bg-[#DC2626] hover:bg-red-700 text-white text-xs font-bold shadow-md cursor-pointer disabled:opacity-50"
+                >
+                  {Boolean(updatingOrderIds[pendingCancelOrder.id])
+                    ? "Đang xử lý..."
+                    : cancelModalError
+                    ? "Thử lại"
+                    : "Xác nhận Hủy & Hoàn kho"}
+                </button>
+              )}
             </div>
           </div>
         </div>

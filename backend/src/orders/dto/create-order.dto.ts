@@ -8,6 +8,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
   Min,
   ValidateNested,
@@ -15,13 +16,31 @@ import {
 
 export class OrderItemDto {
   @IsInt()
+  @Min(1)
   productId: number;
 
+  @IsOptional()
   @IsString()
-  productName: string;
+  productName?: string;
 
-  @IsIn(['S', 'M', 'L'])
+  @IsIn(['S', 'M', 'L', 'ALL'])
   size: string;
+
+  @IsOptional()
+  @IsString()
+  sugarLevel?: string;
+
+  @IsOptional()
+  @IsString()
+  iceLevel?: string;
+
+  @IsOptional()
+  @IsString()
+  temperature?: string;
+
+  @IsOptional()
+  @IsString()
+  notes?: string;
 
   @IsArray()
   @ArrayMaxSize(10, { message: 'Mỗi món chỉ được chọn tối đa 10 topping' })
@@ -31,6 +50,7 @@ export class OrderItemDto {
 
   @IsInt()
   @Min(1)
+  @Max(50)
   quantity: number;
 
   @IsOptional()
@@ -43,6 +63,7 @@ export class CreateOrderDto {
   @IsArray()
   @ValidateNested({ each: true })
   @ArrayMinSize(1)
+  @ArrayMaxSize(50)
   @Type(() => OrderItemDto)
   items: OrderItemDto[];
 

@@ -90,7 +90,7 @@ model InventoryLog {
   note           String?
   performedBy    String?
   createdAt      DateTime   @default(now())
-  ingredient     Ingredient @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+  ingredient     Ingredient @relation(fields: [ingredientId], references: [id], onDelete: Restrict)
 }
 
 model Recipe {
@@ -194,6 +194,10 @@ model OrderItem {
   productId   Int
   productName String
   size        String
+  sugarLevel  String?  @default("100%")
+  iceLevel    String?  @default("100%")
+  temperature String?  @default("COLD")
+  notes       String?
   toppings    String[] // danh sách tên topping
   quantity    Int
   unitPrice   Float

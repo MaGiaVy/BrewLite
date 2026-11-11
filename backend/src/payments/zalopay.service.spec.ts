@@ -1,12 +1,18 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { ZaloPayService } from './zalopay.service.js';
 import { createHmac } from 'crypto';
 
 describe('ZaloPayService', () => {
   let service: ZaloPayService;
+  const originalEnv = process.env;
 
   beforeEach(() => {
+    process.env = { ...originalEnv };
     service = new ZaloPayService();
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
   });
 
   it('should generate app_trans_id with correct yymmdd_orderId format', () => {
@@ -62,6 +68,45 @@ describe('ZaloPayService', () => {
       amount: 99999999, // Hacked amount
     });
     expect(service.verifyCallback(tamperedData, validMac)).toBe(false);
+
+    // TimingSafeEqual checks: different length
+    expect(service.verifyCallback(callbackData, 'short_mac')).toBe(false);
+    expect(service.verifyCallback(callbackData, '')).toBe(false);
+    // Non-string inputs
+    expect(service.verifyCallback(null as any, validMac)).toBe(false);
+    expect(service.verifyCallback(callbackData, undefined as any)).toBe(false);
+  });
+
+  describe('Fail-fast Production Security Checks', () => {
+    it('throw Error nếu NODE_ENV=production mà thiếu ZALOPAY_KEY1', () => {
+      process.env.NODE_ENV = 'production';
+      delete process.env.ZALOPAY_KEY1;
+      process.env.ZALOPAY_KEY2 = 'key2_secret';
+
+      expect(() => new ZaloPayService()).toThrow(
+        /Missing ZALOPAY_KEY1 or ZALOPAY_KEY2 in production environment/,
+      );
+    });
+
+    it('throw Error nếu NODE_ENV=production mà thiếu ZALOPAY_KEY2', () => {
+      process.env.NODE_ENV = 'production';
+      process.env.ZALOPAY_KEY1 = 'key1_secret';
+      delete process.env.ZALOPAY_KEY2;
+
+      expect(() => new ZaloPayService()).toThrow(
+        /Missing ZALOPAY_KEY1 or ZALOPAY_KEY2 in production environment/,
+      );
+    });
+
+    it('khởi tạo thành công trong NODE_ENV=production khi đủ cả ZALOPAY_KEY1 và ZALOPAY_KEY2', () => {
+      process.env.NODE_ENV = 'production';
+      process.env.ZALOPAY_KEY1 = 'prod_key1';
+      process.env.ZALOPAY_KEY2 = 'prod_key2';
+
+      const prodService = new ZaloPayService();
+      expect(prodService.key1).toBe('prod_key1');
+      expect(prodService.key2).toBe('prod_key2');
+    });
   });
 
   it('should call createOrder and return response from ZaloPay Sandbox', async () => {

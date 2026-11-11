@@ -32,7 +32,14 @@ import VoucherModal from "../components/VoucherModal";
 import type { Product } from "../menu/page";
 import { DEFAULT_PRODUCTS } from "../utils/productUtils";
 import { useCartStore, CartItem, isBakeryProduct } from "../store/cartStore";
-import { useAuthStore, apiFetch } from "../store/authStore";
+import {
+  useAuthStore,
+  apiFetch,
+  ACTIVE_PENDING_ORDER_KEY,
+  parseActivePendingOrderRaw,
+  writeActivePendingOrder,
+  clearActivePendingOrder,
+} from "../store/authStore";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function vnd(n: number) {
@@ -188,11 +195,13 @@ function formatSugarLevel(sugar?: string): string {
 /** Single cart item card */
 function CartItemCard({
   item,
+  isOutOfStockSize,
   onUpdateQty,
   onRequestDelete,
   onEdit,
 }: {
   item: CartItem;
+  isOutOfStockSize?: boolean;
   onUpdateQty: (qty: number) => void;
   onRequestDelete: (item: CartItem) => void;
   onEdit: (item: CartItem) => void;
@@ -254,6 +263,13 @@ function CartItemCard({
             </button>
           </div>
         </div>
+
+        {/* Cảnh báo hết ly theo size */}
+        {isOutOfStockSize && (
+          <div className="flex items-center gap-1.5 text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-2.5 py-1">
+            <span>⚠️ Hết ly size {item.size} - Vui lòng bấm chỉnh sửa để đổi size hoặc chọn món khác.</span>
+          </div>
+        )}
 
         {/* Dòng 1: Tùy chọn cơ bản */}
         <div className="flex flex-wrap items-center gap-1.5">
@@ -627,6 +643,7 @@ function SummaryCard({
   onCheckout,
   isLoading,
   error,
+  disabled,
 }: {
   subtotal: number;
   itemCount: number;
@@ -636,6 +653,7 @@ function SummaryCard({
   onCheckout: () => void;
   isLoading?: boolean;
   error?: string | null;
+  disabled?: boolean;
 }) {
   const ECO_FEE = 0;
   const afterDiscount = Math.max(0, subtotal - discount);
@@ -750,10 +768,15 @@ function SummaryCard({
           {error}
         </p>
       )}
+      {disabled && (
+        <p className="text-[12px] font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2 font-body">
+          {"⚠️ Có món trong giỏ hàng đã hết loại ly tương ứng. Vui lòng đổi size để tiếp tục thanh toán.".normalize("NFC")}
+        </p>
+      )}
       <button
         type="button"
         onClick={onCheckout}
-        disabled={itemCount === 0 || isLoading}
+        disabled={itemCount === 0 || isLoading || disabled}
         id="proceedToCheckoutBtn"
         className="w-full flex items-center justify-between gap-2 bg-[#221811] hover:bg-[#2c1810] disabled:opacity-40 disabled:cursor-not-allowed text-white px-5 py-3.5 rounded-xl transition-all active:scale-[0.98] shadow-md font-body"
       >
@@ -915,6 +938,35 @@ export default function CartPage() {
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
   const router = useRouter();
 
+  // Task 3.2 [HIGH-15]: Re-validate trạng thái hết ly (outOfStockSizes)
+  const [productStockMap, setProductStockMap] = useState<
+    Record<number, { outOfStockSizes?: string[]; availableServings?: number }>
+  >({});
+
+  useEffect(() => {
+    let isMounted = true;
+    apiFetch("/products")
+      .then((res) => (res.ok ? res.json() : []))
+      .then((prods: any[]) => {
+        if (!isMounted || !Array.isArray(prods)) return;
+        const map: Record<
+          number,
+          { outOfStockSizes?: string[]; availableServings?: number }
+        > = {};
+        for (const p of prods) {
+          map[p.id] = {
+            outOfStockSizes: p.outOfStockSizes || [],
+            availableServings: p.availableServings,
+          };
+        }
+        setProductStockMap(map);
+      })
+      .catch(() => {});
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
   // State for delete confirmation modal
   const [itemToDelete, setItemToDelete] = useState<CartItem | null>(null);
   const [confirmClearAll, setConfirmClearAll] = useState(false);
@@ -1031,6 +1083,19 @@ export default function CartPage() {
   const subtotal = hydrated ? cartTotal() : 0;
   const displayItems = hydrated ? items : [];
 
+  const hasOutOfStockItems = useMemo(() => {
+    return displayItems.some((item) => {
+      const isBakery = item.isBakery || isBakeryProduct(item);
+      return (
+        !isBakery &&
+        Boolean(
+          item.size &&
+            productStockMap[item.id]?.outOfStockSizes?.includes(item.size)
+        )
+      );
+    });
+  }, [displayItems, productStockMap]);
+
   // Calculate discount based on dynamic promo code configured by Admin (or fallback)
   const matchedVoucher = availableVouchers.find((v) => v.code === appliedPromo);
   const discountRate = matchedVoucher
@@ -1085,7 +1150,13 @@ export default function CartPage() {
   }, [editingItem]);
 
   const handleCheckout = async () => {
-    if (!displayItems.length) return;
+    if (checkoutLoading || !displayItems.length) return;
+    if (hasOutOfStockItems) {
+      setCheckoutError(
+        "Có món trong giỏ hàng đã hết loại ly tương ứng. Vui lòng bấm chỉnh sửa để đổi size hoặc xóa món trước khi đặt hàng."
+      );
+      return;
+    }
 
     // ── Auth Guard: redirect sang /login nếu chưa đăng nhập ──
     const { isAuthenticated } = useAuthStore.getState();
@@ -1098,25 +1169,109 @@ export default function CartPage() {
     setCheckoutError(null);
     try {
       const payload = {
-        items: displayItems.map((item) => ({
-          productId: item.id,
-          productName: item.name,
-          size: item.size ?? "M",
-          toppings: item.toppings ?? [],
-          quantity: item.quantity,
-          unitPrice: item.price,
-        })),
+        items: displayItems.map((item) => {
+          const isBakery = item.isBakery || isBakeryProduct(item);
+          return {
+            productId: item.id,
+            productName: item.name,
+            size: item.size ?? "M",
+            sugarLevel: item.sugarLevel || (isBakery ? undefined : "100%"),
+            iceLevel: item.iceLevel || (isBakery ? undefined : "100%"),
+            temperature:
+              item.temperature ||
+              (item.temp?.toLowerCase() === "hot"
+                ? "HOT"
+                : isBakery
+                ? undefined
+                : "COLD"),
+            notes:
+              [
+                item.notes,
+                isBakery && item.servingStyle
+                  ? `Cách phục vụ: ${item.servingStyle}`
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(" - ") || undefined,
+            toppings: item.toppings ?? [],
+            quantity: item.quantity,
+            unitPrice: item.price,
+          };
+        }),
         discountCode: appliedPromo || undefined,
       };
       // Tự động hủy đơn nháp cũ nếu khách hàng quay lại giỏ và bấm đặt lại (tránh sinh đơn ảo rác)
       if (typeof window !== "undefined") {
-        const prevPendingId = sessionStorage.getItem("brewlite_active_pending_order");
-        if (prevPendingId) {
-          apiFetch(`/orders/${prevPendingId}/status`, {
-            method: "PATCH",
-            body: JSON.stringify({ status: "CANCELLED" }),
-          }).catch(() => {});
-          sessionStorage.removeItem("brewlite_active_pending_order");
+        const rawPending =
+          sessionStorage.getItem(ACTIVE_PENDING_ORDER_KEY) ||
+          localStorage.getItem(ACTIVE_PENDING_ORDER_KEY);
+        if (rawPending) {
+          const pendingRecord = parseActivePendingOrderRaw(rawPending);
+          const currentUserId = useAuthStore.getState().user?.id ?? null;
+
+          if (
+            !pendingRecord ||
+            (pendingRecord.userId !== null && pendingRecord.userId !== currentUserId)
+          ) {
+            clearActivePendingOrder();
+          } else {
+            let inspectRes: Response;
+            try {
+              inspectRes = await apiFetch(`/orders/${pendingRecord.orderId}`);
+            } catch {
+              throw new Error(
+                "Không thể kiểm tra đơn hàng chờ trước đó do lỗi kết nối. Vui lòng thử lại."
+              );
+            }
+
+            let shouldCancelPrev = false;
+            if (inspectRes.ok) {
+              const prevOrder = await inspectRes.json().catch(() => null);
+              const ownerMatches =
+                prevOrder?.userId === undefined ||
+                prevOrder?.userId === null ||
+                (currentUserId !== null && prevOrder.userId === currentUserId);
+              const isCancellableUnpaid =
+                prevOrder?.status === "PENDING" ||
+                prevOrder?.status === "PAYMENT_FAILED";
+              shouldCancelPrev = Boolean(ownerMatches && isCancellableUnpaid);
+              if (!shouldCancelPrev) {
+                clearActivePendingOrder();
+              }
+            } else if ([400, 403, 404].includes(inspectRes.status)) {
+              clearActivePendingOrder();
+            } else {
+              const inspectErr = await inspectRes.json().catch(() => ({}));
+              throw new Error(
+                inspectErr?.message ??
+                  `Không thể kiểm tra đơn hàng chờ trước đó (${inspectRes.status}).`
+              );
+            }
+
+            if (shouldCancelPrev) {
+              let cancelRes: Response;
+              try {
+                cancelRes = await apiFetch(`/orders/${pendingRecord.orderId}/status`, {
+                  method: "PATCH",
+                  body: JSON.stringify({ status: "CANCELLED" }),
+                });
+              } catch {
+                throw new Error(
+                  "Không thể hủy đơn hàng chờ trước đó do lỗi kết nối. Vui lòng thử lại."
+                );
+              }
+
+              if (!cancelRes.ok && ![400, 403, 404, 409].includes(cancelRes.status)) {
+                const cancelErr = await cancelRes.json().catch(() => ({}));
+                throw new Error(
+                  cancelErr?.message ??
+                    `Không thể hủy đơn hàng chờ trước đó (${cancelRes.status}).`
+                );
+              }
+
+              clearActivePendingOrder();
+            }
+          }
         }
       }
 
@@ -1131,7 +1286,10 @@ export default function CartPage() {
       }
       const data = await res.json();
       if (typeof window !== "undefined" && data?.orderId) {
-        sessionStorage.setItem("brewlite_active_pending_order", String(data.orderId));
+        writeActivePendingOrder(
+          Number(data.orderId),
+          useAuthStore.getState().user?.id ?? null
+        );
         try {
           const itemMeta = displayItems.map((item) => ({
             productId: item.id,
@@ -1302,10 +1460,20 @@ export default function CartPage() {
               <div className="flex flex-col gap-3">
                 {displayItems.map((item) => {
                   const key = getKey(item);
+                  const isBakery = item.isBakery || isBakeryProduct(item);
+                  const isOutOfStockSize =
+                    !isBakery &&
+                    Boolean(
+                      item.size &&
+                        productStockMap[item.id]?.outOfStockSizes?.includes(
+                          item.size
+                        )
+                    );
                   return (
                     <CartItemCard
                       key={key}
                       item={item}
+                      isOutOfStockSize={isOutOfStockSize}
                       onUpdateQty={(qty) => updateQuantity(key, qty)}
                       onRequestDelete={(it) => setItemToDelete(it)}
                       onEdit={(it) => setEditingItem(it)}
@@ -1350,6 +1518,7 @@ export default function CartPage() {
                 onCheckout={handleCheckout}
                 isLoading={checkoutLoading}
                 error={checkoutError}
+                disabled={hasOutOfStockItems}
               />
             </aside>
           </div>
@@ -1480,11 +1649,16 @@ export default function CartPage() {
 
       {/* Mobile sticky checkout bar */}
       {hydrated && displayItems.length > 0 && (
-        <div className="lg:hidden sticky bottom-0 z-40 border-t border-stone-200 bg-white/95 backdrop-blur-md px-4 py-3">
+        <div className="lg:hidden sticky bottom-0 z-40 border-t border-stone-200 bg-white/95 backdrop-blur-md px-4 py-3 space-y-2">
+          {checkoutError && (
+            <p className="text-[12px] text-red-600 bg-red-50 border border-red-200 rounded-xl px-3 py-2 font-body">
+              {checkoutError}
+            </p>
+          )}
           <button
             type="button"
             onClick={handleCheckout}
-            disabled={checkoutLoading}
+            disabled={checkoutLoading || hasOutOfStockItems}
             className={`w-full flex items-center justify-between bg-[#221811] hover:bg-[#2c1810] text-white px-5 py-3.5 rounded-xl transition-colors font-body shadow-md active:scale-98 ${checkoutLoading ? "opacity-50 cursor-not-allowed pointer-events-none" : ""}`}
             id="mobileCheckoutBtn"
           >

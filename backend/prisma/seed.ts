@@ -884,7 +884,6 @@ async function main() {
       passwordHash: khachHash,
       role: Role.CUSTOMER,
       fullName: 'Khách Hàng Thân Thiết',
-      position: null,
       phone: '0901000003',
       position: null,
       loyaltyPoints: 120,

@@ -311,6 +311,8 @@ describe('ProductsService — Admin Menu CRUD & Visibility Management', () => {
       const res = await service.findOne(1, false);
       expect(res.outOfStockSizes).toEqual(['M']);
       expect(res.isOutOfStock).toBe(false); // Vẫn bán được Size S và L
+      // Task 3.5 [MEDIUM-14]: Size M hết ly không được kéo availableServings của cả món về 0
+      expect(res.availableServings).toBe(30);
     });
 
     it('khóa toàn bộ món (isOutOfStock = true) khi toàn bộ các size đều hết hàng', async () => {

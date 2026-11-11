@@ -26,6 +26,7 @@ describe('Task T5.1b — Auth Vertical Slice (API-T10..API-T13)', () => {
   let authController: AuthController;
   let jwtService: JwtService;
   let jwtAuthGuard: JwtAuthGuard;
+  let jwtStrategy: JwtStrategy;
   let prisma: {
     user: {
       findUnique: ReturnType<typeof vi.fn>;
@@ -66,6 +67,7 @@ describe('Task T5.1b — Auth Vertical Slice (API-T10..API-T13)', () => {
     authController = module.get<AuthController>(AuthController);
     jwtService = module.get<JwtService>(JwtService);
     jwtAuthGuard = module.get<JwtAuthGuard>(JwtAuthGuard);
+    jwtStrategy = module.get<JwtStrategy>(JwtStrategy);
   });
 
   // ─── API-T10: Token hết hạn -> 401 Unauthorized ──────────────────────────────
@@ -293,6 +295,43 @@ describe('Task T5.1b — Auth Vertical Slice (API-T10..API-T13)', () => {
       expect(loginResult.accessToken).toBeDefined();
       expect(loginResult.user).not.toHaveProperty('passwordHash');
       expect((loginResult.user as any).passwordHash).toBeUndefined();
+    });
+  });
+
+  describe('BE-I4: JwtStrategy fail-closed on DB errors', () => {
+    it('throws UnauthorizedException when prisma.user.findUnique fails instead of failing open', async () => {
+      prisma.user.findUnique.mockRejectedValueOnce(
+        new Error('Database connection lost'),
+      );
+
+      await expect(
+        jwtStrategy.validate({
+          sub: 1,
+          email: 'admin@brewlite.vn',
+          role: Role.ADMIN,
+        }),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('returns active user record from DB when lookup succeeds', async () => {
+      prisma.user.findUnique.mockResolvedValueOnce({
+        id: 1,
+        email: 'admin@brewlite.vn',
+        role: Role.ADMIN,
+        isActive: true,
+      });
+
+      const result = await jwtStrategy.validate({
+        sub: 1,
+        email: 'admin@brewlite.vn',
+        role: Role.CUSTOMER,
+      });
+
+      expect(result).toEqual({
+        userId: 1,
+        email: 'admin@brewlite.vn',
+        role: Role.ADMIN,
+      });
     });
   });
 });

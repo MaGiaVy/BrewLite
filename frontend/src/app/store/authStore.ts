@@ -46,6 +46,97 @@ interface AuthState {
   ) => Promise<{ success: boolean; message: string; voucher?: UserVoucherItem; vouchers?: UserVoucherItem[] }>;
 }
 
+export const ACTIVE_PENDING_ORDER_KEY = "brewlite_active_pending_order";
+
+export interface ActivePendingOrderRecord {
+  orderId: number;
+  userId: number | null;
+}
+
+/** Parse active pending order from either JSON `{ orderId, userId }` or legacy numeric string. */
+export function parseActivePendingOrderRaw(raw: string | null): ActivePendingOrderRecord | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (/^\d+$/.test(trimmed)) {
+    const orderId = Number(trimmed);
+    return Number.isInteger(orderId) && orderId > 0 ? { orderId, userId: null } : null;
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as { orderId?: unknown; userId?: unknown };
+    const orderId = Number(parsed?.orderId);
+    if (!Number.isInteger(orderId) || orderId <= 0) return null;
+    const rawUserId = parsed?.userId;
+    const userId =
+      typeof rawUserId === "number" && Number.isInteger(rawUserId) && rawUserId > 0
+        ? rawUserId
+        : null;
+    return { orderId, userId };
+  } catch {
+    return null;
+  }
+}
+
+/** Read the stored active pending order from sessionStorage or localStorage. */
+export function readActivePendingOrder(): ActivePendingOrderRecord | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw =
+      window.sessionStorage?.getItem(ACTIVE_PENDING_ORDER_KEY) ||
+      window.localStorage?.getItem(ACTIVE_PENDING_ORDER_KEY) ||
+      null;
+    return parseActivePendingOrderRaw(raw);
+  } catch {
+    return null;
+  }
+}
+
+/** Persist the active pending order bound to the creating userId. */
+export function writeActivePendingOrder(orderId: number, userId?: number | null): void {
+  if (typeof window === "undefined" || !Number.isInteger(orderId) || orderId <= 0) return;
+  try {
+    const payload = JSON.stringify({
+      orderId,
+      userId: typeof userId === "number" && Number.isInteger(userId) && userId > 0 ? userId : null,
+    });
+    window.sessionStorage?.setItem(ACTIVE_PENDING_ORDER_KEY, payload);
+  } catch {
+    // ignore storage errors
+  }
+}
+
+/** Clear stored active pending order unconditionally or when matching specific order ID(s). */
+export function clearActivePendingOrder(matchingOrderIds?: number | number[]): void {
+  if (typeof window === "undefined") return;
+  const ids =
+    matchingOrderIds === undefined
+      ? null
+      : Array.isArray(matchingOrderIds)
+        ? matchingOrderIds
+        : [matchingOrderIds];
+  try {
+    if (!ids) {
+      window.sessionStorage?.removeItem(ACTIVE_PENDING_ORDER_KEY);
+      window.localStorage?.removeItem(ACTIVE_PENDING_ORDER_KEY);
+      return;
+    }
+    const ssRec = parseActivePendingOrderRaw(
+      window.sessionStorage?.getItem(ACTIVE_PENDING_ORDER_KEY) ?? null
+    );
+    if (ssRec && ids.includes(ssRec.orderId)) {
+      window.sessionStorage?.removeItem(ACTIVE_PENDING_ORDER_KEY);
+    }
+    const lsRec = parseActivePendingOrderRaw(
+      window.localStorage?.getItem(ACTIVE_PENDING_ORDER_KEY) ?? null
+    );
+    if (lsRec && ids.includes(lsRec.orderId)) {
+      window.localStorage?.removeItem(ACTIVE_PENDING_ORDER_KEY);
+    }
+  } catch {
+    // ignore storage errors
+  }
+}
+
 export const useAuthStore = create<AuthState>()(
   persist(
     (set, get) => ({
@@ -57,8 +148,10 @@ export const useAuthStore = create<AuthState>()(
       setAuth: (user, token) =>
         set({ user, token, isAuthenticated: true }),
 
-      logout: () =>
-        set({ user: null, token: null, isAuthenticated: false }),
+      logout: () => {
+        clearActivePendingOrder();
+        set({ user: null, token: null, isAuthenticated: false });
+      },
 
       setHasHydrated: (state) => set({ _hasHydrated: state }),
 

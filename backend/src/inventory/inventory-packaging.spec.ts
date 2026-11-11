@@ -330,8 +330,21 @@ describe('InventoryService — Packaging & Consumables Management (Task 4)', () 
       version: 1,
     });
 
-    mockPrisma.ingredient.update.mockImplementation(({ data }: any) =>
-      Promise.resolve({
+    mockPrisma.ingredient.updateMany.mockResolvedValue({ count: 1 });
+    mockPrisma.ingredient.findUnique
+      .mockResolvedValueOnce({
+        id: 50,
+        code: 'PKG_SPOON',
+        name: 'Muỗng nhựa',
+        unit: 'cái',
+        stock: 200,
+        minThreshold: 30,
+        costPerUnit: 100,
+        type: 'INGREDIENT',
+        isRequiredForSale: true,
+        version: 1,
+      })
+      .mockResolvedValueOnce({
         id: 50,
         code: 'PKG_SPOON',
         name: 'Muỗng nhựa trong suốt',
@@ -339,11 +352,10 @@ describe('InventoryService — Packaging & Consumables Management (Task 4)', () 
         stock: 200,
         minThreshold: 30,
         costPerUnit: 100,
-        type: data.type ?? 'INGREDIENT',
-        isRequiredForSale: data.isRequiredForSale ?? true,
+        type: 'PACKAGING',
+        isRequiredForSale: false,
         version: 2,
-      }),
-    );
+      });
 
     const result = await service.updateIngredient(50, {
       name: 'Muỗng nhựa trong suốt',
@@ -351,8 +363,8 @@ describe('InventoryService — Packaging & Consumables Management (Task 4)', () 
       isRequiredForSale: false,
     });
 
-    expect(mockPrisma.ingredient.update).toHaveBeenCalledWith({
-      where: { id: 50 },
+    expect(mockPrisma.ingredient.updateMany).toHaveBeenCalledWith({
+      where: { id: 50, version: 1 },
       data: expect.objectContaining({
         name: 'Muỗng nhựa trong suốt',
         type: 'PACKAGING',

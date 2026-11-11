@@ -90,13 +90,21 @@ export class ProductsService {
         activeSizes.length > 0 &&
         activeSizes.every((s) => outOfStockSizes.includes(s));
 
-      for (const r of product.recipes) {
-        if (r.ingredient && r.amount > 0) {
-          const isRequired = r.ingredient.isRequiredForSale ?? true;
-          if (!isRequired) continue;
-          const possible = Math.floor(r.ingredient.stock / r.amount);
-          if (possible < minServings) {
-            minServings = possible;
+      if (ingredientOutOfStock) {
+        minServings = 0;
+      } else {
+        for (const r of product.recipes) {
+          if (r.ingredient && r.amount > 0) {
+            const isRequired = r.ingredient.isRequiredForSale ?? true;
+            if (!isRequired) continue;
+            // Bỏ qua nguyên liệu/bao bì thuộc size đã hết hàng, tránh kéo minServings của cả món về 0 (Task 3.5 [MEDIUM-14])
+            if (r.size && r.size !== 'ALL' && outOfStockSizes.includes(r.size)) {
+              continue;
+            }
+            const possible = Math.floor(r.ingredient.stock / r.amount);
+            if (possible < minServings) {
+              minServings = possible;
+            }
           }
         }
       }

@@ -10,6 +10,7 @@ describe('OrdersController', () => {
     getMyOrders: ReturnType<typeof vi.fn>;
     getOrderById: ReturnType<typeof vi.fn>;
     updateOrderStatus: ReturnType<typeof vi.fn>;
+    deleteOrder: ReturnType<typeof vi.fn>;
     getBaristaQueue: ReturnType<typeof vi.fn>;
   };
 
@@ -19,6 +20,7 @@ describe('OrdersController', () => {
       getMyOrders: vi.fn(),
       getOrderById: vi.fn(),
       updateOrderStatus: vi.fn(),
+      deleteOrder: vi.fn(),
       getBaristaQueue: vi.fn(),
     };
 
@@ -89,6 +91,45 @@ describe('OrdersController', () => {
       5,
       'CUSTOMER',
     );
+    expect(result).toEqual(mockResult);
+  });
+
+  it('updateOrderStatus should forward customer role when customer retries PAYMENT_FAILED order to PENDING', async () => {
+    const mockReq = {
+      user: { userId: 5, email: 'customer@brewlite.com', role: 'CUSTOMER' },
+    };
+    const mockResult = {
+      orderId: 10,
+      previousStatus: 'PAYMENT_FAILED',
+      status: 'PENDING',
+    };
+    service.updateOrderStatus.mockResolvedValue(mockResult);
+
+    const result = await controller.updateOrderStatus(
+      mockReq as any,
+      10,
+      { status: 'PENDING' as any },
+    );
+
+    expect(service.updateOrderStatus).toHaveBeenCalledWith(
+      10,
+      'PENDING',
+      5,
+      'CUSTOMER',
+    );
+    expect(result).toEqual(mockResult);
+  });
+
+  it('deleteOrder should call service.deleteOrder with orderId, userId and role', async () => {
+    const mockReq = {
+      user: { userId: 5, email: 'customer@brewlite.com', role: 'CUSTOMER' },
+    };
+    const mockResult = { success: true, message: 'Đã xóa đơn hàng #10' };
+    service.deleteOrder.mockResolvedValue(mockResult);
+
+    const result = await controller.deleteOrder(mockReq as any, 10);
+
+    expect(service.deleteOrder).toHaveBeenCalledWith(10, 5, 'CUSTOMER');
     expect(result).toEqual(mockResult);
   });
 });

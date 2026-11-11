@@ -142,6 +142,29 @@ export class UsersService {
       throw new NotFoundException(`Không tìm thấy nhân viên với ID ${id}`);
     }
 
+    // Chặn đổi email của Root Admin
+    if (
+      user.email === 'admin@brewlite.vn' &&
+      dto.email &&
+      dto.email.toLowerCase().trim() !== user.email
+    ) {
+      throw new BadRequestException(
+        'Không thể thay đổi địa chỉ email của Quản trị viên Tối cao (Root Admin).',
+      );
+    }
+
+    // Chặn Admin tự hạ quyền của chính mình
+    if (
+      dto.role &&
+      dto.role !== Role.ADMIN &&
+      currentAdminId &&
+      id === currentAdminId
+    ) {
+      throw new BadRequestException(
+        'Bạn không thể tự hạ quyền Quản trị viên của chính mình.',
+      );
+    }
+
     if (user.email === 'admin@brewlite.vn') {
       if (dto.isActive === false) {
         throw new BadRequestException(
@@ -151,6 +174,18 @@ export class UsersService {
       if (dto.role && dto.role !== Role.ADMIN) {
         throw new BadRequestException(
           'Không thể thay đổi vai trò của Quản trị viên Tối cao (Root Admin)',
+        );
+      }
+    }
+
+    // Chặn hạ quyền nếu hệ thống chỉ còn 1 Admin duy nhất hoạt động
+    if (user.role === Role.ADMIN && dto.role && dto.role !== Role.ADMIN) {
+      const activeAdminCount = await this.prisma.user.count({
+        where: { role: Role.ADMIN, isActive: true },
+      });
+      if (activeAdminCount <= 1) {
+        throw new BadRequestException(
+          'Không thể hạ quyền Quản trị viên duy nhất còn lại trong hệ thống.',
         );
       }
     }

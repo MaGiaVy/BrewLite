@@ -133,6 +133,7 @@ export default function ProductDetailModal({
 }: ProductDetailModalProps) {
   // State for customization options
   const isBakery = useMemo(() => isBakeryProduct(product), [product]);
+  const [selectedSize, setSelectedSize] = useState<"S" | "M" | "L">("M");
   const isCurrentSizeOutOfStock = !isBakery && Boolean(
     (product as any)?.outOfStockSizes?.includes(selectedSize)
   );
@@ -145,8 +146,6 @@ export default function ProductDetailModal({
   const currentAvailableToppings = useMemo(() => {
     return isBakery ? availableBakeryToppings : availableToppings;
   }, [isBakery, availableBakeryToppings, availableToppings]);
-
-  const [selectedSize, setSelectedSize] = useState<"S" | "M" | "L">("M");
   const [temperature, setTemperature] = useState<"iced" | "hot">("iced");
   const [sweetness, setSweetness] = useState<string>("100%");
   const [iceLevel, setIceLevel] = useState<string>("Đá thường (100%)");

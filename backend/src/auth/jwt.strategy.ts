@@ -30,44 +30,36 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       );
     }
 
-    if (this.prisma?.user?.findUnique) {
-      try {
-        const user = await this.prisma.user.findUnique({
-          where: { id: userId },
-          select: { id: true, email: true, role: true, isActive: true },
-        });
-
-        if (!user) {
-          throw new UnauthorizedException('Tài khoản không tồn tại.');
-        }
-
-        if (user.isActive === false) {
-          throw new UnauthorizedException(
-            'Tài khoản của bạn đã bị tạm khóa. Vui lòng liên hệ Quản lý cửa hàng.',
-          );
-        }
-
-        return {
-          userId: user.id,
-          email: user.email,
-          role: user.role ?? Role.CUSTOMER,
-        };
-      } catch (err: any) {
-        if (err instanceof UnauthorizedException) {
-          throw err;
-        }
-        return {
-          userId,
-          email: payload.email,
-          role: payload.role ?? Role.CUSTOMER,
-        };
-      }
+    if (!this.prisma?.user?.findUnique) {
+      throw new UnauthorizedException('Không thể xác thực thông tin người dùng.');
     }
 
-    return {
-      userId,
-      email: payload.email,
-      role: payload.role ?? Role.CUSTOMER,
-    };
+    try {
+      const user = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { id: true, email: true, role: true, isActive: true },
+      });
+
+      if (!user) {
+        throw new UnauthorizedException('Tài khoản không tồn tại.');
+      }
+
+      if (user.isActive === false) {
+        throw new UnauthorizedException(
+          'Tài khoản của bạn đã bị tạm khóa. Vui lòng liên hệ Quản lý cửa hàng.',
+        );
+      }
+
+      return {
+        userId: user.id,
+        email: user.email,
+        role: user.role ?? Role.CUSTOMER,
+      };
+    } catch (err: any) {
+      if (err instanceof UnauthorizedException) {
+        throw err;
+      }
+      throw new UnauthorizedException('Không thể xác thực thông tin người dùng.');
+    }
   }
 }

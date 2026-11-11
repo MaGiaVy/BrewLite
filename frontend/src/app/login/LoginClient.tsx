@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
@@ -32,6 +32,21 @@ async function apiAuth(
     throw new Error(msg);
   }
   return data as { accessToken: string; user: AuthUser };
+}
+
+function getSafeRedirectPath(rawRedirect: string | null): string | null {
+  if (!rawRedirect) return null;
+  const trimmed = rawRedirect.trim();
+  if (!trimmed.startsWith("/") || trimmed.startsWith("//") || trimmed.startsWith("/\\")) {
+    return null;
+  }
+  try {
+    const resolved = new URL(trimmed, "https://brewlite.local");
+    if (resolved.origin !== "https://brewlite.local") return null;
+    return `${resolved.pathname}${resolved.search}${resolved.hash}`;
+  } catch {
+    return null;
+  }
 }
 
 // ─── Left Column — Brand Story ───────────────────────────────────────────────
@@ -240,19 +255,24 @@ export default function LoginClient({
   const [rememberMe, setRememberMe] = useState(true);
   const [termsAccepted, setTermsAccepted] = useState(false);
 
-  const getRoleDestination = (loggedUser?: AuthUser | null) => {
-    if (redirectParam) return redirectParam;
-    if (loggedUser?.role === "ADMIN") return "/admin";
-    if (loggedUser?.role === "STAFF") return "/staff";
-    return "/menu";
-  };
+  const safeRedirect = getSafeRedirectPath(redirectParam);
+
+  const getRoleDestination = useCallback(
+    (loggedUser?: AuthUser | null) => {
+      if (safeRedirect) return safeRedirect;
+      if (loggedUser?.role === "ADMIN") return "/admin";
+      if (loggedUser?.role === "STAFF") return "/staff";
+      return "/menu";
+    },
+    [safeRedirect]
+  );
 
   // Redirect nếu đã đăng nhập
   useEffect(() => {
     if (_hasHydrated && isAuthenticated && user) {
       router.replace(getRoleDestination(user));
     }
-  }, [_hasHydrated, isAuthenticated, user, redirectParam, router]);
+  }, [_hasHydrated, isAuthenticated, user, getRoleDestination, router]);
 
   const switchTab = (newMode: AuthMode) => {
     setMode(newMode);

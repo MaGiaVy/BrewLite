@@ -30,6 +30,9 @@ interface OrderItem {
   quantity: number;
   unitPrice: number;
   size?: string | null;
+  sugarLevel?: string | null;
+  iceLevel?: string | null;
+  temperature?: string | null;
   toppings?: string[] | string | null;
   notes?: string | null;
   recipeBreakdown?: RecipeBreakdownItem[];
@@ -159,7 +162,7 @@ export default function BaristaKdsPage() {
   const [standardProducts, setStandardProducts] = useState<StandardProductRecipe[]>([]);
   const [standardToppings, setStandardToppings] = useState<StandardToppingRecipe[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [updatingOrderId, setUpdatingOrderId] = useState<number | null>(null);
+  const [updatingOrderIds, setUpdatingOrderIds] = useState<Record<number, boolean>>({});
 
   // Workbench & Interactive Checklist States
   const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
@@ -172,8 +175,21 @@ export default function BaristaKdsPage() {
   const [lookupSearch, setLookupSearch] = useState<string>("");
   const [nowMs, setNowMs] = useState<number>(0);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const [toastVariant, setToastVariant] = useState<"default" | "error">("default");
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [pendingCancelOrder, setPendingCancelOrder] = useState<{
+    id: number;
+    totalAmount?: number;
+    discountCode?: string | null;
+    customerName?: string | null;
+  } | null>(null);
+  const [cancelModalError, setCancelModalError] = useState<{
+    message: string;
+    isStale: boolean;
+  } | null>(null);
 
   const prevPaidIdsRef = useRef<Set<number>>(new Set());
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Live 1-second timer for SLA & Digital Clock
   useEffect(() => {
@@ -195,14 +211,27 @@ export default function BaristaKdsPage() {
     }
   }, [_hasHydrated, isAuthenticated, user, router]);
 
-  const showToast = (msg: string) => {
+  const showToast = (msg: string, variant: "default" | "error" = "default") => {
+    if (toastTimerRef.current) {
+      clearTimeout(toastTimerRef.current);
+    }
     setToastMsg(msg);
-    setTimeout(() => setToastMsg(null), 3200);
+    setToastVariant(variant);
+    toastTimerRef.current = setTimeout(
+      () => setToastMsg(null),
+      variant === "error" ? 4500 : 3200
+    );
   };
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    };
+  }, []);
 
   // Poll GET /orders/barista/queue every 3 seconds
   const fetchQueue = useCallback(async () => {
-    if (!_hasHydrated || !isAuthenticated) return;
+    if (!_hasHydrated || !isAuthenticated || (user?.role !== 'STAFF' && user?.role !== 'ADMIN')) return;
     try {
       const res = await apiFetch("/orders/barista/queue", {
         cache: "no-store",
@@ -230,11 +259,11 @@ export default function BaristaKdsPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [_hasHydrated, isAuthenticated, soundEnabled]);
+  }, [_hasHydrated, isAuthenticated, user, soundEnabled]);
 
   // Fetch Stock & Standard Recipe Matrix for Tab 2 & KPI alerts
   const fetchStockAndRecipes = useCallback(async () => {
-    if (!_hasHydrated || !isAuthenticated) return;
+    if (!_hasHydrated || !isAuthenticated || (user?.role !== 'STAFF' && user?.role !== 'ADMIN')) return;
     try {
       const [ingRes, recRes, prodRes] = await Promise.all([
         apiFetch("/inventory/ingredients", { cache: "no-store" }),
@@ -272,7 +301,7 @@ export default function BaristaKdsPage() {
     } catch {
       // Ignore error
     }
-  }, [_hasHydrated, isAuthenticated]);
+  }, [_hasHydrated, isAuthenticated, user]);
 
   useEffect(() => {
     fetchQueue();
@@ -355,11 +384,24 @@ export default function BaristaKdsPage() {
     }));
   };
 
+  const requestCancelOrder = (order: BaristaOrder) => {
+    setCancelModalError(null);
+    setPendingCancelOrder({
+      id: order.id,
+      totalAmount: order.totalAmount,
+      discountCode: order.discountCode,
+      customerName: order.user?.fullName || order.user?.email || null,
+    });
+  };
+
   const handleTransitionStatus = async (
     orderId: number,
-    nextStatus: "PREPARING" | "READY" | "COMPLETED" | "CANCELLED"
-  ) => {
-    setUpdatingOrderId(orderId);
+    nextStatus: "PREPARING" | "READY" | "COMPLETED" | "CANCELLED",
+    onFailure?: (message: string, isStale: boolean) => void
+  ): Promise<boolean> => {
+    if (updatingOrderIds[orderId]) return false;
+    setUpdatingOrderIds((prev) => ({ ...prev, [orderId]: true }));
+    setActionError(null);
     try {
       const res = await apiFetch(`/orders/${orderId}/status`, {
         method: "PATCH",
@@ -367,8 +409,28 @@ export default function BaristaKdsPage() {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        showToast(err.message || "Không thể chuyển trạng thái đơn hàng");
-        return;
+        const backendMsg = Array.isArray(err?.message)
+          ? err.message.join(", ")
+          : typeof err?.message === "string"
+          ? err.message
+          : "";
+        const displayMsg =
+          res.status === 409
+            ? `Xung đột trạng thái (Đơn #BL-${orderId}): ${
+                backendMsg ||
+                "Đơn hàng đã thay đổi bởi thao tác khác. Đã đồng bộ lại hàng đợi."
+              }`
+            : res.status === 400
+            ? `Thao tác không hợp lệ (Đơn #BL-${orderId}): ${
+                backendMsg ||
+                "Trạng thái hiện tại không cho phép chuyển tiếp. Đã đồng bộ lại hàng đợi."
+              }`
+            : backendMsg || "Không thể chuyển trạng thái đơn hàng";
+        setActionError(displayMsg);
+        showToast(displayMsg, "error");
+        await fetchQueue();
+        onFailure?.(displayMsg, res.status === 409 || res.status === 400);
+        return false;
       }
       const statusLabels: Record<string, string> = {
         PREPARING: "Đang pha chế (PREPARING)",
@@ -380,10 +442,34 @@ export default function BaristaKdsPage() {
         `✅ Đơn #BL-${orderId} → ${statusLabels[nextStatus] || nextStatus}`
       );
       await Promise.all([fetchQueue(), fetchStockAndRecipes()]);
+      return true;
     } catch {
-      showToast("Lỗi kết nối máy chủ khi cập nhật trạng thái");
+      const msg = "Lỗi kết nối máy chủ khi cập nhật trạng thái";
+      setActionError(msg);
+      showToast(msg, "error");
+      onFailure?.(msg, false);
+      return false;
     } finally {
-      setUpdatingOrderId(null);
+      setUpdatingOrderIds((prev) => {
+        const next = { ...prev };
+        delete next[orderId];
+        return next;
+      });
+    }
+  };
+
+  const handleConfirmCancelOrder = async () => {
+    if (!pendingCancelOrder) return;
+    const targetId = pendingCancelOrder.id;
+    setCancelModalError(null);
+    const ok = await handleTransitionStatus(
+      targetId,
+      "CANCELLED",
+      (message, isStale) => setCancelModalError({ message, isStale })
+    );
+    if (ok) {
+      setPendingCancelOrder(null);
+      setCancelModalError(null);
     }
   };
 
@@ -490,10 +576,20 @@ export default function BaristaKdsPage() {
     });
   }, [nowMs]);
 
-  if (!_hasHydrated) {
+  if (
+    !_hasHydrated ||
+    !isAuthenticated ||
+    !user ||
+    (user.role !== "STAFF" && user.role !== "ADMIN")
+  ) {
     return (
       <div className="min-h-screen bg-[#F6F1EC] flex items-center justify-center font-body text-[#2C1810]">
-        Đang khởi tạo Trạm Điều Phối Barista KDS...
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-2 border-[#845326] border-t-transparent rounded-full animate-spin" />
+          <span className="text-sm font-semibold text-[#845326]">
+            Đang xác thực quyền truy cập Barista KDS...
+          </span>
+        </div>
       </div>
     );
   }
@@ -502,9 +598,20 @@ export default function BaristaKdsPage() {
     <div className="min-h-screen bg-[#F6F1EC] text-[#1D1B19] flex flex-col font-body selection:bg-[#FEBC85] selection:text-[#2C1810]">
       {/* ── FLOATING TOAST NOTIFICATION ── */}
       {toastMsg && (
-        <div className="fixed bottom-6 right-6 z-50 px-5 py-3.5 rounded-2xl bg-[#2C1810] text-[#FEF8F4] shadow-2xl border border-[#FEBC85]/30 flex items-center gap-3 animate-fadeIn">
-          <span className="material-symbols-outlined text-[#FEBC85]">
-            notifications_active
+        <div
+          role={toastVariant === "error" ? "alert" : "status"}
+          className={`fixed bottom-6 right-6 z-50 px-5 py-3.5 rounded-2xl shadow-2xl border flex items-center gap-3 animate-fadeIn max-w-md ${
+            toastVariant === "error"
+              ? "bg-[#991B1B] text-white border-[#FECACA]"
+              : "bg-[#2C1810] text-[#FEF8F4] border-[#FEBC85]/30"
+          }`}
+        >
+          <span
+            className={`material-symbols-outlined ${
+              toastVariant === "error" ? "text-[#FECACA]" : "text-[#FEBC85]"
+            }`}
+          >
+            {toastVariant === "error" ? "error" : "notifications_active"}
           </span>
           <span className="text-[13px] font-semibold">{toastMsg}</span>
         </div>
@@ -810,6 +917,27 @@ export default function BaristaKdsPage() {
 
       {/* ── 3. MAIN WORKSPACE CONTENT BY ACTIVE TAB ── */}
       <main className="flex-1 w-full max-w-[1720px] mx-auto px-4 md:px-6 py-4">
+        {actionError && (
+          <div
+            role="alert"
+            className="mb-4 px-4 py-3 rounded-2xl bg-[#FEF2F2] border border-[#FECACA] text-[#991B1B] flex items-center justify-between gap-3 shadow-xs"
+          >
+            <div className="flex items-center gap-2.5 text-xs font-semibold">
+              <span className="material-symbols-outlined text-lg shrink-0">
+                warning
+              </span>
+              <span>{actionError}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setActionError(null)}
+              className="w-7 h-7 rounded-lg bg-white/80 hover:bg-white text-[#991B1B] flex items-center justify-center text-xs font-bold shrink-0 cursor-pointer"
+              aria-label="Đóng thông báo lỗi"
+            >
+              ✕
+            </button>
+          </div>
+        )}
         {/* =====================================================================
             TAB 1: HYBRID KDS WORKSTATION (3-COL KANBAN + PREPARATION WORKBENCH)
         ===================================================================== */}
@@ -863,7 +991,7 @@ export default function BaristaKdsPage() {
                           setSelectedOrderId(order.id);
                           setWorkbenchOpen(true);
                         }}
-                        isUpdating={updatingOrderId === order.id}
+                        isUpdating={Boolean(updatingOrderIds[order.id])}
                         primaryAction={{
                           label: "Nhận đơn & Bắt đầu pha",
                           icon: "play_arrow",
@@ -872,9 +1000,7 @@ export default function BaristaKdsPage() {
                           onClick: () =>
                             handleTransitionStatus(order.id, "PREPARING"),
                         }}
-                        onCancel={() =>
-                          handleTransitionStatus(order.id, "CANCELLED")
-                        }
+                        onCancel={() => requestCancelOrder(order)}
                       />
                     ))}
                   </div>
@@ -923,7 +1049,7 @@ export default function BaristaKdsPage() {
                           setSelectedOrderId(order.id);
                           setWorkbenchOpen(true);
                         }}
-                        isUpdating={updatingOrderId === order.id}
+                        isUpdating={Boolean(updatingOrderIds[order.id])}
                         primaryAction={{
                           label: "Pha xong • Báo khách lấy",
                           icon: "notifications_active",
@@ -980,7 +1106,7 @@ export default function BaristaKdsPage() {
                           setSelectedOrderId(order.id);
                           setWorkbenchOpen(true);
                         }}
-                        isUpdating={updatingOrderId === order.id}
+                        isUpdating={Boolean(updatingOrderIds[order.id])}
                         primaryAction={{
                           label: "Đã giao khách (COMPLETED)",
                           icon: "task_alt",
@@ -1009,9 +1135,10 @@ export default function BaristaKdsPage() {
                   checkedSteps={checkedSteps}
                   onToggleStep={toggleChecklistStep}
                   isUpdating={
-                    selectedOrder ? updatingOrderId === selectedOrder.id : false
+                    selectedOrder ? Boolean(updatingOrderIds[selectedOrder.id]) : false
                   }
                   onTransition={handleTransitionStatus}
+                  onRequestCancel={requestCancelOrder}
                   onClose={() => setWorkbenchOpen(false)}
                 />
               </aside>
@@ -1313,6 +1440,117 @@ export default function BaristaKdsPage() {
           </div>
         )}
       </main>
+
+      {/* ── CONFIRM CANCEL PAID ORDER MODAL (PAID -> CANCELLED) ── */}
+      {pendingCancelOrder && (
+        <div className="fixed inset-0 z-50 bg-black/55 backdrop-blur-xs flex items-center justify-center p-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="staff-cancel-order-title"
+            className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-[#FECACA]"
+          >
+            <div className="flex items-start gap-3">
+              <div className="w-11 h-11 rounded-2xl bg-[#FEF2F2] border border-[#FECACA] text-[#991B1B] flex items-center justify-center shrink-0">
+                <span className="material-symbols-outlined text-2xl">
+                  warning
+                </span>
+              </div>
+              <div>
+                <span className="text-[11px] font-mono font-extrabold uppercase tracking-wider text-[#991B1B]">
+                  Xác nhận thao tác hủy đơn đã thanh toán
+                </span>
+                <h3
+                  id="staff-cancel-order-title"
+                  className="font-headline text-lg font-extrabold text-[#2C1810] mt-0.5"
+                >
+                  Hủy đơn #BL-{pendingCancelOrder.id}?
+                </h3>
+                {(pendingCancelOrder.customerName ||
+                  pendingCancelOrder.totalAmount !== undefined) && (
+                  <p className="text-xs text-[#504440] mt-1">
+                    {pendingCancelOrder.customerName
+                      ? `${pendingCancelOrder.customerName} • `
+                      : ""}
+                    {pendingCancelOrder.totalAmount !== undefined
+                      ? `Tổng đơn: ${pendingCancelOrder.totalAmount.toLocaleString("vi-VN")}đ`
+                      : ""}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div className="my-4 p-3.5 rounded-2xl bg-[#FEF2F2] border border-[#FECACA] space-y-1.5 text-xs text-[#7F1D1D]">
+              <p className="font-bold text-[#991B1B]">
+                Hệ thống sẽ tự động thực hiện các hoàn trả sau:
+              </p>
+              <p>
+                • <strong>Hoàn kho nguyên vật liệu:</strong> Toàn bộ định lượng
+                BOM &amp; Topping của đơn sẽ được cộng lại vào kho.
+              </p>
+              <p>
+                • <strong>Hoàn mã giảm giá (Voucher):</strong> Trả lại voucher{" "}
+                {pendingCancelOrder.discountCode
+                  ? `(${pendingCancelOrder.discountCode}) `
+                  : ""}
+                vào ví khách hàng nếu đơn có sử dụng.
+              </p>
+              <p>
+                • <strong>Thu hồi điểm Loyalty:</strong> Trừ lại điểm tích lũy
+                khách đã nhận từ thanh toán đơn PAID này
+                {pendingCancelOrder.totalAmount !== undefined
+                  ? ` (${Math.floor(
+                      pendingCancelOrder.totalAmount / 1000
+                    ).toLocaleString("vi-VN")} điểm)`
+                  : ""}
+                .
+              </p>
+            </div>
+
+            {cancelModalError && (
+              <div
+                role="alert"
+                className="mb-4 p-3 rounded-2xl bg-[#FEF2F2] border border-[#FECACA] text-xs font-semibold text-[#991B1B]"
+              >
+                {cancelModalError.message}
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2.5">
+              <button
+                type="button"
+                disabled={Boolean(updatingOrderIds[pendingCancelOrder.id])}
+                onClick={() => {
+                  setPendingCancelOrder(null);
+                  setCancelModalError(null);
+                }}
+                className="px-4 py-2.5 rounded-xl bg-[#F3EDE8] hover:bg-[#E6DCD2] text-xs font-bold text-[#504440] cursor-pointer disabled:opacity-50"
+              >
+                {cancelModalError?.isStale ? "Đóng" : "Giữ lại đơn"}
+              </button>
+              {!cancelModalError?.isStale && (
+                <button
+                  type="button"
+                  disabled={Boolean(updatingOrderIds[pendingCancelOrder.id])}
+                  onClick={handleConfirmCancelOrder}
+                  className="px-4 py-2.5 rounded-xl bg-[#991B1B] hover:bg-[#7F1D1D] text-white text-xs font-bold shadow-md flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  <span className="material-symbols-outlined text-base">
+                    cancel
+                  </span>
+                  <span>
+                    {Boolean(updatingOrderIds[pendingCancelOrder.id])
+                      ? "Đang hủy đơn..."
+                      : cancelModalError
+                      ? "Thử lại"
+                      : "Xác nhận hủy đơn"}
+                  </span>
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1471,6 +1709,27 @@ function HighContrastOrderTicket({
                         <span className="px-2 py-0.5 rounded-md bg-white border border-[#D8C8B8] text-[10px] font-extrabold text-[#2C1810]">
                           Size {itemSize}
                         </span>
+                        {item.temperature && (
+                          <span
+                            className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold border ${
+                              item.temperature.toUpperCase() === "HOT"
+                                ? "bg-[#FEF2F2] border-[#FECACA] text-[#DC2626]"
+                                : "bg-[#EFF6FF] border-[#BFDBFE] text-[#2563EB]"
+                            }`}
+                          >
+                            {item.temperature.toUpperCase() === "HOT" ? "🔥 Nóng" : "🧊 Lạnh"}
+                          </span>
+                        )}
+                        {item.iceLevel && (
+                          <span className="px-2 py-0.5 rounded-md bg-[#F0F9FF] border-[#BAE6FD] text-[10px] font-bold text-[#0284C7]">
+                            Đá {item.iceLevel}
+                          </span>
+                        )}
+                        {item.sugarLevel && (
+                          <span className="px-2 py-0.5 rounded-md bg-[#FDF4FF] border-[#F5D0FE] text-[10px] font-bold text-[#C026D3]">
+                            Đường {item.sugarLevel}
+                          </span>
+                        )}
                         {parsedToppings.map((top, idx) => (
                           <span
                             key={idx}
@@ -1577,6 +1836,7 @@ function PreparationWorkbenchPanel({
   onToggleStep,
   isUpdating,
   onTransition,
+  onRequestCancel,
   onClose,
 }: {
   order: BaristaOrder | null;
@@ -1592,8 +1852,9 @@ function PreparationWorkbenchPanel({
   isUpdating: boolean;
   onTransition: (
     orderId: number,
-    nextStatus: "PREPARING" | "READY" | "COMPLETED" | "CANCELLED"
+    nextStatus: "PREPARING" | "READY" | "COMPLETED"
   ) => void;
+  onRequestCancel: (order: BaristaOrder) => void;
   onClose: () => void;
 }) {
   if (!order) {
@@ -1824,18 +2085,37 @@ function PreparationWorkbenchPanel({
                   </span>
                 </div>
 
-                {parsedToppings.length > 0 && (
-                  <div className="flex flex-wrap gap-1">
-                    {parsedToppings.map((t, idx) => (
-                      <span
-                        key={idx}
-                        className="px-2 py-0.5 rounded-md bg-[#FFF7ED] border border-[#FED7AA] text-[11px] font-bold text-[#9A3412]"
-                      >
-                        + Topping: {t}
-                      </span>
-                    ))}
-                  </div>
-                )}
+                <div className="flex flex-wrap items-center gap-1">
+                  {item.temperature && (
+                    <span
+                      className={`px-2 py-0.5 rounded-md text-[11px] font-extrabold border ${
+                        item.temperature.toUpperCase() === "HOT"
+                          ? "bg-[#FEF2F2] border-[#FECACA] text-[#DC2626]"
+                          : "bg-[#EFF6FF] border-[#BFDBFE] text-[#2563EB]"
+                      }`}
+                    >
+                      {item.temperature.toUpperCase() === "HOT" ? "🔥 Nóng" : "🧊 Lạnh"}
+                    </span>
+                  )}
+                  {item.iceLevel && (
+                    <span className="px-2 py-0.5 rounded-md bg-[#F0F9FF] border-[#BAE6FD] text-[11px] font-bold text-[#0284C7]">
+                      Đá {item.iceLevel}
+                    </span>
+                  )}
+                  {item.sugarLevel && (
+                    <span className="px-2 py-0.5 rounded-md bg-[#FDF4FF] border-[#F5D0FE] text-[11px] font-bold text-[#C026D3]">
+                      Đường {item.sugarLevel}
+                    </span>
+                  )}
+                  {parsedToppings.map((t, idx) => (
+                    <span
+                      key={idx}
+                      className="px-2 py-0.5 rounded-md bg-[#FFF7ED] border border-[#FED7AA] text-[11px] font-bold text-[#9A3412]"
+                    >
+                      + Topping: {t}
+                    </span>
+                  ))}
+                </div>
 
                 {/* Checkable Ingredient Steps */}
                 <div className="flex flex-col gap-1.5">
@@ -1969,7 +2249,7 @@ function PreparationWorkbenchPanel({
           <button
             type="button"
             disabled={isUpdating}
-            onClick={() => onTransition(order.id, "CANCELLED")}
+            onClick={() => onRequestCancel(order)}
             className="px-3.5 py-3 rounded-xl bg-[#FEF2F2] hover:bg-[#991B1B] text-[#991B1B] hover:text-white border border-[#FECACA] font-bold text-xs flex items-center gap-1 transition-all cursor-pointer"
             title="Hủy đơn & Hoàn trả nguyên liệu vào kho"
           >

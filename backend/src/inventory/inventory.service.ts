@@ -21,10 +21,12 @@ export function resolveDefaultMaxDiscount(code: string, discountPercent: number)
 import {
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { OrderStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { expirePendingOrders } from '../orders/order-refund.helper.js';
 import {
   CreateIngredientDto,
   CreateToppingRecipeDto,
@@ -39,8 +41,35 @@ import {
   UpsertRecipeDto,
 } from './dto/inventory.dto.js';
 
+/** Đọc cấu hình phụ thu size chuẩn toàn quán từ StoreSetting với fallback mặc định (S:0, M:5000, L:10000). */
+export async function fetchGlobalSizePricing(prisma: any) {
+  const pricing = { sizeS: 0, sizeM: 5000, sizeL: 10000 };
+  const keyMap: Record<string, keyof typeof pricing> = {
+    SIZE_UPCHARGE_S: 'sizeS',
+    SIZE_UPCHARGE_M: 'sizeM',
+    SIZE_UPCHARGE_L: 'sizeL',
+  };
+
+  if (prisma?.storeSetting?.findMany) {
+    const settings = await prisma.storeSetting.findMany({
+      where: { key: { in: Object.keys(keyMap) } },
+    });
+    for (const s of settings) {
+      const field = keyMap[s.key];
+      if (field && s.value !== undefined && s.value !== null && s.value !== '') {
+        const parsed = Number(s.value);
+        if (!Number.isNaN(parsed)) pricing[field] = parsed;
+      }
+    }
+  }
+
+  return pricing;
+}
+
 @Injectable()
 export class InventoryService {
+  private readonly logger = new Logger(InventoryService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   private formatIngredient(ing: any) {
@@ -214,8 +243,11 @@ export class InventoryService {
       }
     }
 
-    const updated = await this.prisma.ingredient.update({
-      where: { id },
+    const updateResult = await this.prisma.ingredient.updateMany({
+      where: {
+        id,
+        version: current.version,
+      },
       data: {
         ...(cleanCode !== undefined ? { code: cleanCode } : {}),
         ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
@@ -235,7 +267,15 @@ export class InventoryService {
       },
     });
 
-    return this.formatIngredient(updated);
+    if (updateResult.count === 0) {
+      throw new ConflictException(
+        'Xung đột cập nhật tồn kho (Optimistic Lock Conflict). Dữ liệu vừa bị thay đổi bởi tiến trình khác, vui lòng tải lại.',
+      );
+    }
+
+    const refreshed = await this.prisma.ingredient.findUnique({ where: { id } });
+
+    return this.formatIngredient(refreshed);
   }
 
   async deleteIngredient(id: number) {
@@ -609,26 +649,7 @@ export class InventoryService {
 
   // ─── GLOBAL SIZE PRICING & PUBLIC PRICING CONFIG ──────────────────────────
   async getGlobalSizePricing() {
-    let sizeS = 0;
-    let sizeM = 5000;
-    let sizeL = 10000;
-
-    if ((this.prisma as any).storeSetting?.findMany) {
-      const settings = await (this.prisma as any).storeSetting.findMany({
-        where: {
-          key: {
-            in: ['SIZE_UPCHARGE_S', 'SIZE_UPCHARGE_M', 'SIZE_UPCHARGE_L'],
-          },
-        },
-      });
-      for (const s of settings) {
-        if (s.key === 'SIZE_UPCHARGE_S') sizeS = Number(s.value || 0);
-        if (s.key === 'SIZE_UPCHARGE_M') sizeM = Number(s.value || 5000);
-        if (s.key === 'SIZE_UPCHARGE_L') sizeL = Number(s.value || 10000);
-      }
-    }
-
-    return { sizeS, sizeM, sizeL };
+    return fetchGlobalSizePricing(this.prisma);
   }
 
   async updateGlobalSizePricing(dto: UpdateSizePricingDto) {
@@ -920,6 +941,8 @@ export class InventoryService {
   }
 
   async getDashboardStats() {
+    await expirePendingOrders(this.prisma, this.logger);
+
     const [ingredients, orders, sizePricing, vouchers, logs, allRecipes] =
       await Promise.all([
         this.getAllIngredients(),

@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { createHmac } from 'crypto';
+import { createHmac, timingSafeEqual } from 'crypto';
 
 export interface ZaloPayCreateOrderParams {
   orderId: number;
@@ -33,15 +33,34 @@ export interface ZaloPayQueryResult {
 export class ZaloPayService {
   private readonly logger = new Logger(ZaloPayService.name);
 
-  readonly appId = Number(process.env.ZALOPAY_APP_ID || 2554);
-  readonly key1 = process.env.ZALOPAY_KEY1 || 'sdngKKJmqEMzvh5QQcdD2A9XBSKUNaYn';
-  readonly key2 = process.env.ZALOPAY_KEY2 || 'trMrHtvjo6myautxDUiAcYsVtaeQ8nhf';
-  readonly createEndpoint =
-    process.env.ZALOPAY_CREATE_ENDPOINT || 'https://sb-openapi.zalopay.vn/v2/create';
-  readonly queryEndpoint =
-    process.env.ZALOPAY_QUERY_ENDPOINT || 'https://sb-openapi.zalopay.vn/v2/query';
-  readonly callbackUrl =
-    process.env.ZALOPAY_CALLBACK_URL || 'http://localhost:3001/payments/zalopay/callback';
+  readonly appId: number;
+  readonly key1: string;
+  readonly key2: string;
+  readonly createEndpoint: string;
+  readonly queryEndpoint: string;
+  readonly callbackUrl: string;
+
+  constructor() {
+    // Fail-fast trong môi trường Production nếu thiếu khóa bí mật ZaloPay
+    if (
+      process.env.NODE_ENV === 'production' &&
+      (!process.env.ZALOPAY_KEY1 || !process.env.ZALOPAY_KEY2)
+    ) {
+      throw new Error(
+        'Missing ZALOPAY_KEY1 or ZALOPAY_KEY2 in production environment. Server startup aborted for security.',
+      );
+    }
+
+    this.appId = Number(process.env.ZALOPAY_APP_ID || 2554);
+    this.key1 = process.env.ZALOPAY_KEY1 || 'sdngKKJmqEMzvh5QQcdD2A9XBSKUNaYn';
+    this.key2 = process.env.ZALOPAY_KEY2 || 'trMrHtvjo6myautxDUiAcYsVtaeQ8nhf';
+    this.createEndpoint =
+      process.env.ZALOPAY_CREATE_ENDPOINT || 'https://sb-openapi.zalopay.vn/v2/create';
+    this.queryEndpoint =
+      process.env.ZALOPAY_QUERY_ENDPOINT || 'https://sb-openapi.zalopay.vn/v2/query';
+    this.callbackUrl =
+      process.env.ZALOPAY_CALLBACK_URL || 'http://localhost:3001/payments/zalopay/callback';
+  }
 
   /**
    * Sinh mã giao dịch app_trans_id theo định dạng chuẩn yymmdd_xxxx của ZaloPay
@@ -151,10 +170,19 @@ export class ZaloPayService {
 
   /**
    * Xác thực chữ ký Callback từ ZaloPay bằng Key2 (Data Integrity Verification)
+   * Sử dụng timingSafeEqual để chống Timing Attack
    */
   verifyCallback(dataStr: string, requestMac: string): boolean {
+    if (typeof dataStr !== 'string' || typeof requestMac !== 'string') {
+      return false;
+    }
     const computedMac = createHmac('sha256', this.key2).update(dataStr).digest('hex');
-    return computedMac === requestMac;
+    const computedBuf = Buffer.from(computedMac, 'utf8');
+    const reqBuf = Buffer.from(requestMac, 'utf8');
+    if (computedBuf.length !== reqBuf.length) {
+      return false;
+    }
+    return timingSafeEqual(computedBuf, reqBuf);
   }
 
   /**
@@ -178,7 +206,6 @@ export class ZaloPayService {
     const mac = createHmac('sha256', this.key2).update(dataStr).digest('hex');
     return { data: dataStr, mac, type: 1 };
   }
-
 
   /**
    * Tra cứu trạng thái giao dịch từ máy chủ ZaloPay qua API v2/query

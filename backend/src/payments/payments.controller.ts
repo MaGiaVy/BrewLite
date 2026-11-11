@@ -26,6 +26,12 @@ interface AuthRequest extends Request {
 export class PaymentsController {
   constructor(private readonly paymentsService: PaymentsService) {}
 
+  private assertSandboxAllowed(envFlag: string, message: string): void {
+    if (process.env.NODE_ENV === 'production' && process.env[envFlag] !== 'true') {
+      throw new ForbiddenException(message);
+    }
+  }
+
   /**
    * POST /payments — Thanh toán đơn hàng không tiền mặt (Mock Gateway / Kịch bản Demo)
    * Yêu cầu JWT Bearer Token, kiểm tra quyền sở hữu đơn hàng
@@ -40,15 +46,16 @@ export class PaymentsController {
     @Headers('idempotency-key') idempotencyKey?: string,
   ) {
     // Bảo mật PAY-01: Chặn Mock Payment trên môi trường Production (trừ khi có cờ cho phép chạy demo)
-    if (
-      process.env.NODE_ENV === 'production' &&
-      process.env.ALLOW_MOCK_PAYMENT !== 'true'
-    ) {
-      throw new ForbiddenException(
-        'Cổng thanh toán thử nghiệm (Mock Payment) đã bị vô hiệu hóa trên môi trường Production.',
-      );
-    }
-    return this.paymentsService.processPayment(dto, req.user.userId, idempotencyKey);
+    this.assertSandboxAllowed(
+      'ALLOW_MOCK_PAYMENT',
+      'Cổng thanh toán thử nghiệm (Mock Payment) đã bị vô hiệu hóa trên môi trường Production.',
+    );
+    return this.paymentsService.processPayment(
+      dto,
+      req.user.userId,
+      idempotencyKey,
+      req.user.role,
+    );
   }
 
   /**
@@ -61,7 +68,11 @@ export class PaymentsController {
     @Request() req: AuthRequest,
     @Body('orderId', ParseIntPipe) orderId: number,
   ) {
-    return this.paymentsService.createZaloPayOrder(orderId, req.user.userId);
+    return this.paymentsService.createZaloPayOrder(
+      orderId,
+      req.user.userId,
+      req.user.role,
+    );
   }
 
   /**
@@ -84,38 +95,37 @@ export class PaymentsController {
     @Param('orderId', ParseIntPipe) orderId: number,
     @Query('appTransId') appTransId?: string,
   ) {
-    return this.paymentsService.getZaloPayStatus(orderId, req.user.userId, appTransId);
+    return this.paymentsService.getZaloPayStatus(
+      orderId,
+      req.user.userId,
+      appTransId,
+      req.user.role,
+    );
   }
 
   /**
    * POST /payments/zalopay/confirm — Xác nhận thanh toán từ Cổng ZaloPay Sandbox Gateway
+   * Yêu cầu JWT Bearer Token; quyền sở hữu đơn hàng (hoặc ADMIN/STAFF) được kiểm tra ở tầng service.
    */
   @UseGuards(JwtAuthGuard)
   @Post('zalopay/confirm')
   @HttpCode(HttpStatus.OK)
   confirmZaloPayOrder(
     @Request() req: AuthRequest,
-    @Body('orderId', ParseIntPipe) orderId?: number | string,
+    @Body('orderId', new ParseIntPipe({ optional: true })) orderId?: number | string,
     @Body('appTransId') appTransId?: string,
   ) {
     // Bảo mật PAY-01: Chặn bypass Sandbox confirm trên môi trường Production
-    if (
-      process.env.NODE_ENV === 'production' &&
-      process.env.ALLOW_SANDBOX_CONFIRM !== 'true'
-    ) {
-      throw new ForbiddenException(
-        'Xác nhận thanh toán Sandbox bị vô hiệu hóa trên môi trường Production. Vui lòng sử dụng Webhook chính thức từ ZaloPay.',
-      );
-    }
-    if (typeof req === 'number') {
-      return this.paymentsService.confirmZaloPaySandbox(
-        req,
-        undefined,
-        undefined,
-        typeof orderId === 'string' ? orderId : appTransId,
-      );
-    }
-    const targetOrderId = typeof orderId === 'number' ? orderId : Number(orderId);
+    this.assertSandboxAllowed(
+      'ALLOW_SANDBOX_CONFIRM',
+      'Xác nhận thanh toán Sandbox bị vô hiệu hóa trên môi trường Production. Vui lòng sử dụng Webhook chính thức từ ZaloPay.',
+    );
+    const targetOrderId =
+      orderId === undefined || orderId === null || orderId === ''
+        ? undefined
+        : typeof orderId === 'number'
+          ? orderId
+          : Number(orderId);
     return this.paymentsService.confirmZaloPaySandbox(
       targetOrderId,
       req.user.userId,
@@ -132,14 +142,15 @@ export class PaymentsController {
   @HttpCode(HttpStatus.OK)
   cancelZaloPayOrder(
     @Request() req: AuthRequest,
-    @Body('orderId', ParseIntPipe) orderId?: number,
+    @Body('orderId', ParseIntPipe) orderId: number,
   ) {
-    if (typeof req === 'number') {
-      return this.paymentsService.cancelZaloPaySandbox(req);
-    }
-    const targetOrderId = typeof orderId === 'number' ? orderId : Number(orderId);
+    // Bảo mật PAY-01 / BE-C1: Chặn Sandbox cancel trên môi trường Production
+    this.assertSandboxAllowed(
+      'ALLOW_SANDBOX_CONFIRM',
+      'Hủy thanh toán Sandbox bị vô hiệu hóa trên môi trường Production.',
+    );
     return this.paymentsService.cancelZaloPaySandbox(
-      targetOrderId,
+      orderId,
       req.user.userId,
       req.user.role,
     );

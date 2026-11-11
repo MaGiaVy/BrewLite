@@ -1,13 +1,17 @@
 "use client";
 
 import React, { Suspense, useEffect, useState, useRef, useCallback } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
 import { Flame, Snowflake } from "lucide-react";
 import Header from "../components/Header";
 import Footer from "../components/Footer";
-import { apiFetch, useAuthStore } from "../store/authStore";
+import {
+  apiFetch,
+  useAuthStore,
+  clearActivePendingOrder,
+} from "../store/authStore";
 import { isBakeryProduct } from "../store/cartStore";
 import { DEFAULT_PRODUCTS, normalizeStitchImageUrl } from "../utils/productUtils";
 
@@ -144,10 +148,24 @@ interface ConfirmationOrderDetail {
   totalAmount: number;
   discountCode?: string | null;
   discountAmount?: number;
+  staffName?: string | null;
   createdAt: string;
   updatedAt: string;
   items: ConfirmationOrderItem[];
   payments: ConfirmationPayment[];
+}
+
+async function parseOrderApiError(res: Response, fallback: string): Promise<string> {
+  try {
+    const data = await res.json();
+    if (Array.isArray(data?.message)) return data.message.join(", ");
+    if (typeof data?.message === "string" && data.message.trim()) {
+      return data.message;
+    }
+  } catch {
+    // ignore non-JSON body
+  }
+  return `${fallback} (HTTP ${res.status})`;
 }
 
 const vnd = (n: number) => (n || 0).toLocaleString("vi-VN") + "₫";
@@ -167,11 +185,11 @@ const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   },
   PENDING: {
     label: "PENDING • CHỜ THANH TOÁN",
-    color: "text-amber-700 bg-amber-50 ring-amber-100",
+    color: "text-amber-800 bg-amber-50 ring-amber-300 font-bold",
   },
   PAYMENT_FAILED: {
     label: "PAYMENT FAILED • THANH TOÁN THẤT BẠI",
-    color: "text-[#8C3B32] bg-[#FAF0EE] ring-[#8C3B32]/30 font-bold",
+    color: "text-rose-700 bg-rose-50 ring-rose-300 font-bold",
   },
   PREPARING: {
     label: "PREPARING • BARISTA ĐANG PHA CHẾ",
@@ -192,10 +210,27 @@ const STATUS_LABELS: Record<string, { label: string; color: string }> = {
 };
 
 function OrderConfirmationContent() {
+  const router = useRouter();
   const searchParams = useSearchParams();
-  const orderId = searchParams.get("orderId");
-  const [order, setOrder] = useState<ConfirmationOrderDetail | null>(null);
-  const [loading, setLoading] = useState(true);
+  const rawOrderId = searchParams.get("orderId")?.trim() ?? "";
+  const parsedOrderId = /^\d+$/.test(rawOrderId) ? Number(rawOrderId) : NaN;
+  const validOrderId =
+    Number.isInteger(parsedOrderId) && parsedOrderId > 0 ? parsedOrderId : null;
+  const [orderState, setOrderState] = useState<ConfirmationOrderDetail | null>(null);
+  const [fetchErrorState, setFetchErrorState] = useState<{
+    orderId: number;
+    message: string;
+  } | null>(null);
+  const fetchError: string | null = !validOrderId
+    ? "Không tìm thấy mã đơn hàng hợp lệ trong đường dẫn."
+    : fetchErrorState?.orderId === validOrderId
+      ? fetchErrorState.message
+      : null;
+  const order = validOrderId && orderState?.id === validOrderId ? orderState : null;
+  const loading = Boolean(validOrderId) && !fetchError && !order;
+  const [actionBusy, setActionBusy] = useState<"retry" | "cancel" | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [confirmCancelModal, setConfirmCancelModal] = useState(false);
   const [receiptState, setReceiptState] = useState<"idle" | "loading" | "done">(
     "idle"
   );
@@ -216,9 +251,9 @@ function OrderConfirmationContent() {
   >({});
 
   useEffect(() => {
-    if (!orderId || typeof window === "undefined") return;
+    if (!validOrderId || typeof window === "undefined") return;
     try {
-      const stored = localStorage.getItem(`order_customizations_${orderId}`);
+      const stored = localStorage.getItem(`order_customizations_${validOrderId}`);
       if (stored) {
         const list = JSON.parse(stored);
         if (Array.isArray(list)) {
@@ -235,7 +270,7 @@ function OrderConfirmationContent() {
     } catch {
       // ignore
     }
-  }, [orderId]);
+  }, [validOrderId]);
 
   const playReadyChime = useCallback(() => {
     try {
@@ -264,47 +299,213 @@ function OrderConfirmationContent() {
     }
   }, []);
 
+  const formatOrderFetchError = useCallback(
+    async (res: Response, targetOrderId: number): Promise<string> => {
+      if (res.status === 401) {
+        return "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại để xem đơn hàng.";
+      }
+      if (res.status === 403) {
+        return "Bạn không có quyền truy cập thông tin đơn hàng này.";
+      }
+      if (res.status === 404) {
+        return `Không tìm thấy đơn hàng #BL-${targetOrderId}.`;
+      }
+      return await parseOrderApiError(
+        res,
+        `Không thể tải thông tin đơn hàng #BL-${targetOrderId}`
+      );
+    },
+    []
+  );
+
   // Fetch & Auto-poll every 3 seconds so status updates live when Barista clicks READY / COMPLETED
   useEffect(() => {
-    if (!orderId) {
-      setLoading(false);
+    if (!validOrderId) {
+      prevStatusRef.current = null;
       return;
     }
     let isMounted = true;
+    let stopped = false;
+    let intervalId: ReturnType<typeof setInterval> | null = null;
+    prevStatusRef.current = null;
 
-    const fetchDetail = (isInitial = false) => {
-      apiFetch(`/orders/${orderId}`)
-        .then((res) => (res.ok ? res.json() : null))
-        .then((data: ConfirmationOrderDetail | null) => {
+    const stopPolling = () => {
+      stopped = true;
+      if (intervalId) {
+        clearInterval(intervalId);
+        intervalId = null;
+      }
+    };
+
+    const fetchDetail = async (isInitial = false) => {
+      try {
+        const res = await apiFetch(`/orders/${validOrderId}`);
+        if (!isMounted) return;
+
+        if (!res.ok) {
+          const msg = await formatOrderFetchError(res, validOrderId);
           if (!isMounted) return;
-          if (data) {
-            if (
-              prevStatusRef.current &&
-              prevStatusRef.current !== data.status &&
-              (data.status === "READY" || data.status === "COMPLETED")
-            ) {
-              playReadyChime();
-            }
-            prevStatusRef.current = data.status;
-            setOrder(data);
-            if (isInitial) {
-              useAuthStore.getState().refreshProfile();
-            }
+
+          if ([401, 403, 404].includes(res.status)) {
+            stopPolling();
+            setOrderState(null);
+            prevStatusRef.current = null;
           }
-          if (isInitial) setLoading(false);
-        })
-        .catch(() => {
-          if (isInitial && isMounted) setLoading(false);
+          setFetchErrorState({ orderId: validOrderId, message: msg });
+          return;
+        }
+
+        const data: ConfirmationOrderDetail = await res.json();
+        if (!isMounted) return;
+
+        setFetchErrorState(null);
+        if (
+          prevStatusRef.current &&
+          prevStatusRef.current !== data.status &&
+          (data.status === "READY" || data.status === "COMPLETED")
+        ) {
+          playReadyChime();
+        }
+        prevStatusRef.current = data.status;
+        setOrderState(data);
+
+        if (
+          ["PAID", "PREPARING", "READY", "COMPLETED", "CANCELLED"].includes(
+            data.status
+          )
+        ) {
+          clearActivePendingOrder(data.id);
+        }
+        if (data.status === "COMPLETED" || data.status === "CANCELLED") {
+          stopPolling();
+        }
+        if (isInitial) {
+          useAuthStore.getState().refreshProfile();
+        }
+      } catch {
+        if (!isMounted) return;
+        setFetchErrorState({
+          orderId: validOrderId,
+          message:
+            "Không thể kết nối máy chủ để tải thông tin đơn hàng. Vui lòng thử lại.",
         });
+      }
     };
 
     fetchDetail(true);
-    const interval = setInterval(() => fetchDetail(false), 3000);
+    if (!stopped) {
+      intervalId = setInterval(() => {
+        if (
+          stopped ||
+          prevStatusRef.current === "COMPLETED" ||
+          prevStatusRef.current === "CANCELLED"
+        ) {
+          stopPolling();
+          return;
+        }
+        fetchDetail(false);
+      }, 3000);
+    }
     return () => {
       isMounted = false;
-      clearInterval(interval);
+      stopPolling();
     };
-  }, [orderId, playReadyChime]);
+  }, [validOrderId, playReadyChime, formatOrderFetchError]);
+
+  const refreshOrderDetail = useCallback(async () => {
+    if (!validOrderId) return;
+    try {
+      const res = await apiFetch(`/orders/${validOrderId}`);
+      if (!res.ok) {
+        const msg = await formatOrderFetchError(res, validOrderId);
+        setFetchErrorState({ orderId: validOrderId, message: msg });
+        if ([401, 403, 404].includes(res.status)) {
+          setOrderState(null);
+          prevStatusRef.current = null;
+        }
+        return;
+      }
+      const data: ConfirmationOrderDetail = await res.json();
+      setFetchErrorState(null);
+      prevStatusRef.current = data.status;
+      setOrderState(data);
+      if (
+        ["PAID", "PREPARING", "READY", "COMPLETED", "CANCELLED"].includes(
+          data.status
+        )
+      ) {
+        clearActivePendingOrder(data.id);
+      }
+    } catch {
+      setFetchErrorState({
+        orderId: validOrderId,
+        message:
+          "Không thể kết nối máy chủ để tải thông tin đơn hàng. Vui lòng thử lại.",
+      });
+    }
+  }, [validOrderId, formatOrderFetchError]);
+
+  const handlePayOrRetry = async () => {
+    if (!order || actionBusy) return;
+    setActionError(null);
+    if (order.status === "PENDING") {
+      router.push(`/checkout?orderId=${order.id}`);
+      return;
+    }
+    if (order.status === "PAYMENT_FAILED") {
+      setActionBusy("retry");
+      try {
+        const res = await apiFetch(`/orders/${order.id}/status`, {
+          method: "PATCH",
+          body: JSON.stringify({ status: "PENDING" }),
+        });
+        if (!res.ok) {
+          const errMsg = await parseOrderApiError(
+            res,
+            "Không thể thử lại thanh toán đơn hàng"
+          );
+          setActionError(errMsg);
+          await refreshOrderDetail();
+          return;
+        }
+        router.push(`/checkout?orderId=${order.id}`);
+      } catch {
+        setActionError("Lỗi kết nối máy chủ khi khởi tạo lại thanh toán.");
+      } finally {
+        setActionBusy(null);
+      }
+    }
+  };
+
+  const handleCancelOrder = async () => {
+    if (!order || actionBusy) return;
+    setActionBusy("cancel");
+    setActionError(null);
+    try {
+      const res = await apiFetch(`/orders/${order.id}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: "CANCELLED" }),
+      });
+      if (!res.ok) {
+        const errMsg = await parseOrderApiError(
+          res,
+          "Không thể hủy đơn hàng"
+        );
+        setActionError(errMsg);
+        await refreshOrderDetail();
+        setConfirmCancelModal(false);
+        return;
+      }
+      clearActivePendingOrder(order.id);
+      await refreshOrderDetail();
+      setConfirmCancelModal(false);
+    } catch {
+      setActionError("Lỗi kết nối máy chủ khi hủy đơn hàng.");
+      setConfirmCancelModal(false);
+    } finally {
+      setActionBusy(null);
+    }
+  };
 
   const handleDownloadReceipt = () => {
     setReceiptState("loading");
@@ -313,32 +514,6 @@ function OrderConfirmationContent() {
       setTimeout(() => setReceiptState("idle"), 3000);
     }, 800);
   };
-
-  const status = order?.status ?? "PAID";
-  const statusInfo = STATUS_LABELS[status] ?? STATUS_LABELS["PAID"];
-  const isReady = status === "READY";
-  const isCompleted = status === "COMPLETED";
-  const isPreparing = status === "PREPARING";
-  const isCancelled = status === "CANCELLED" || status === "PAYMENT_FAILED";
-
-  // Loyalty points (Task 10: 1 hạt vàng per 1.000 VNĐ)
-  const loyaltyPoints = order && !isCancelled ? Math.floor(order.totalAmount / 1000) : 0;
-
-  // Payment method label
-  const paymentMethod =
-    order?.payments?.[0]?.method === "CARD"
-      ? "Thẻ ngân hàng"
-      : order?.payments?.[0]?.method === "MOMO"
-        ? "Ví MoMo Express"
-        : "Ví điện tử";
-
-  // Time string
-  const timeStr = order?.createdAt
-    ? new Date(order.createdAt).toLocaleTimeString("vi-VN", {
-      hour: "2-digit",
-      minute: "2-digit",
-    }) + " Hôm nay"
-    : "Hôm nay";
 
   if (loading) {
     return (
@@ -352,6 +527,89 @@ function OrderConfirmationContent() {
       </div>
     );
   }
+
+  if (fetchError || !order) {
+    return (
+      <div className="min-h-screen bg-[#fef8f4] text-[#1d1b19] flex flex-col font-body">
+        <Header cartCount={0} activeTab="orders" />
+        <main className="flex-1 w-full bg-[#fef8f4] flex items-center justify-center px-4 py-14">
+          <div className="max-w-lg w-full bg-white rounded-3xl p-8 shadow-[0_12px_36px_-6px_rgba(44,24,16,0.08)] border border-[#e7e1dd] text-center">
+            <div className="w-16 h-16 mx-auto mb-5 rounded-full bg-[#FAF0EE] text-[#8C3B32] flex items-center justify-center">
+              <span className="material-symbols-outlined text-3xl">error_outline</span>
+            </div>
+            <h1 className="font-headline text-2xl font-bold text-[#2c1810] mb-2">
+              Không thể hiển thị đơn hàng
+            </h1>
+            <p className="text-sm text-[#504440] mb-6 leading-relaxed">
+              {fetchError ?? "Không tìm thấy thông tin đơn hàng."}
+            </p>
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+              <Link
+                href="/orders"
+                className="w-full sm:w-auto px-6 py-3 rounded-full bg-[#2c1810] hover:bg-[#351300] text-white text-sm font-semibold flex items-center justify-center gap-2 transition-all active:scale-95"
+              >
+                <span className="material-symbols-outlined text-lg">history</span>
+                <span>Xem đơn hàng của tôi</span>
+              </Link>
+              <Link
+                href="/menu"
+                className="w-full sm:w-auto px-6 py-3 rounded-full bg-[#ede7e3] hover:bg-[#e7e1dd] text-[#2c1810] text-sm font-semibold flex items-center justify-center gap-2 transition-all active:scale-95"
+              >
+                <span className="material-symbols-outlined text-lg">storefront</span>
+                <span>Về thực đơn</span>
+              </Link>
+            </div>
+          </div>
+        </main>
+        <Footer />
+      </div>
+    );
+  }
+
+  const status = order.status;
+  const statusInfo = STATUS_LABELS[status] ?? {
+    label: status,
+    color: "text-[#504440] bg-[#f3ede9] ring-[#e7e1dd]",
+  };
+  const isReady = status === "READY";
+  const isCompleted = status === "COMPLETED";
+  const isPreparing = status === "PREPARING";
+  const isCancelled = status === "CANCELLED";
+  const isPaymentFailed = status === "PAYMENT_FAILED";
+  const isPending = status === "PENDING";
+  const isUnpaid = isPending || isPaymentFailed;
+
+  // Loyalty points (Task 10: 1 hạt vàng per 1.000 VNĐ)
+  const loyaltyPoints =
+    !isCancelled && !isUnpaid ? Math.floor(order.totalAmount / 1000) : 0;
+
+  // Payment method label
+  const rawPayMethod = order.payments?.[0]?.method;
+  const PAYMENT_METHOD_LABELS: Record<string, string> = {
+    BANK_CARD: "Thẻ ngân hàng",
+    CARD: "Thẻ ngân hàng",
+    EWALLET: "Ví điện tử",
+    MOMO: "Ví MoMo Express",
+  };
+  const paymentMethod =
+    (rawPayMethod && PAYMENT_METHOD_LABELS[rawPayMethod]) || rawPayMethod || "Cashless";
+
+  // Time string
+  const timeStr = order.createdAt
+    ? new Date(order.createdAt).toLocaleTimeString("vi-VN", {
+      hour: "2-digit",
+      minute: "2-digit",
+    }) + " Hôm nay"
+    : "Hôm nay";
+
+  const itemsSubtotal =
+    order.items?.reduce((s, i) => s + i.unitPrice * i.quantity, 0) ?? 0;
+  const receiptSubtotal = itemsSubtotal > 0 ? itemsSubtotal : order.totalAmount ?? 0;
+  const discountAmount = order.discountAmount || 0;
+  const afterDiscount = Math.max(0, receiptSubtotal - discountAmount);
+  const expectedVat = Math.floor(afterDiscount * 0.08);
+  const hasChargedVat =
+    itemsSubtotal > 0 && order.totalAmount > afterDiscount && expectedVat > 0;
 
   return (
     <div className="min-h-screen bg-[#fef8f4] text-[#1d1b19] flex flex-col font-body">
@@ -370,20 +628,28 @@ function OrderConfirmationContent() {
               <div
                 className={`absolute inset-0 rounded-full blur-lg animate-pulse ${isCancelled
                   ? "bg-[#8C3B32]/25"
-                  : isReady
-                    ? "bg-emerald-400/50"
-                    : "bg-[#febc85]/40"
+                  : isPaymentFailed
+                    ? "bg-rose-400/35"
+                    : isPending
+                      ? "bg-amber-400/35"
+                      : isReady
+                        ? "bg-emerald-400/50"
+                        : "bg-[#febc85]/40"
                   }`}
               />
               <div className="relative w-20 h-20 rounded-full bg-white shadow-[0_8px_24px_-4px_rgba(44,24,16,0.12)] flex items-center justify-center ring-4 ring-[#f3ede9]">
                 <div
                   className={`w-14 h-14 rounded-full flex items-center justify-center ${isCancelled
                     ? "bg-[#8C3B32] text-white"
-                    : isReady
-                      ? "bg-emerald-600 text-white"
-                      : isCompleted
-                        ? "bg-[#2D6A4F] text-white"
-                        : "bg-[#2c1810] text-[#ffdcc2]"
+                    : isPaymentFailed
+                      ? "bg-rose-600 text-white"
+                      : isPending
+                        ? "bg-amber-500 text-white"
+                        : isReady
+                          ? "bg-emerald-600 text-white"
+                          : isCompleted
+                            ? "bg-[#2D6A4F] text-white"
+                            : "bg-[#2c1810] text-[#ffdcc2]"
                     }`}
                 >
                   <span
@@ -401,16 +667,20 @@ function OrderConfirmationContent() {
                   >
                     {isCancelled
                       ? "cancel"
-                      : isReady
-                        ? "notifications_active"
-                        : isPreparing
-                          ? "autorenew"
-                          : "check_circle"}
+                      : isPaymentFailed
+                        ? "error_outline"
+                        : isPending
+                          ? "schedule"
+                          : isReady
+                            ? "notifications_active"
+                            : isPreparing
+                              ? "autorenew"
+                              : "check_circle"}
                   </span>
                 </div>
               </div>
               {/* Loyalty chip */}
-              {!isCancelled && (
+              {!isCancelled && !isUnpaid && (
                 <div className="absolute -top-1 -right-3 bg-[#ffdcc2] text-[#2e1500] text-[10px] font-bold px-2 py-0.5 rounded-full shadow-sm flex items-center gap-0.5">
                   <span className="material-symbols-outlined text-xs">
                     local_cafe
@@ -424,47 +694,74 @@ function OrderConfirmationContent() {
             <span
               className={`inline-flex items-center gap-1.5 px-4 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider mb-3 ${isCancelled
                 ? "bg-[#FAF0EE] text-[#8C3B32] ring-1 ring-[#8C3B32]/30"
-                : isReady
-                  ? "bg-emerald-600 text-white shadow-sm"
-                  : "bg-[#f3ede9] text-[#78491d]"
+                : isPaymentFailed
+                  ? "bg-rose-50 text-rose-700 ring-1 ring-rose-300"
+                  : isPending
+                    ? "bg-amber-50 text-amber-800 ring-1 ring-amber-300"
+                    : isReady
+                      ? "bg-emerald-600 text-white shadow-sm"
+                      : "bg-[#f3ede9] text-[#78491d]"
                 }`}
             >
               <span
                 className={`w-1.5 h-1.5 rounded-full animate-ping ${isCancelled
                   ? "bg-[#8C3B32]"
-                  : isReady
-                    ? "bg-white"
-                    : "bg-[#845326]"
+                  : isPaymentFailed
+                    ? "bg-rose-600"
+                    : isPending
+                      ? "bg-amber-600"
+                      : isReady
+                        ? "bg-white"
+                        : "bg-[#845326]"
                   }`}
               />
               {isCancelled
-                ? "Đơn hàng đã bị hủy / Chưa hoàn tất thanh toán"
-                : isReady
-                  ? "Quầy Barista đang gọi bạn nhận món!"
-                  : isPreparing
-                    ? "Barista đang pha chế trực tiếp (Auto-sync 3s)"
-                    : isCompleted
-                      ? "Đã bàn giao đồ uống hoàn tất"
-                      : "Giao dịch không tiền mặt thành công (Auto-sync 3s)"}
+                ? "Đơn hàng đã bị hủy"
+                : isPaymentFailed
+                  ? "THANH TOÁN THẤT BẠI"
+                  : isPending
+                    ? "CHỜ THANH TOÁN"
+                    : isReady
+                      ? "Quầy Barista đang gọi bạn nhận món!"
+                      : isPreparing
+                        ? "Barista đang pha chế trực tiếp (Auto-sync 3s)"
+                        : isCompleted
+                          ? "Đã bàn giao đồ uống hoàn tất"
+                          : "Giao dịch không tiền mặt thành công (Auto-sync 3s)"}
             </span>
 
             {/* ── Dynamic Headline ── */}
             <h1 className="font-headline text-3xl md:text-[42px] text-[#2c1810] tracking-tight leading-tight mb-2">
               {isCancelled
-                ? "Đặt hàng thất bại"
-                : isReady
-                  ? "Đồ uống đã sẵn sàng lấy!"
-                  : isPreparing
-                    ? "Barista đang pha chế món của bạn!"
-                    : isCompleted
-                      ? "Đã nhận nước thành công!"
-                      : "Đặt hàng thành công!"}
+                ? "Đơn hàng đã bị hủy"
+                : isPaymentFailed
+                  ? "Thanh toán thất bại"
+                  : isPending
+                    ? "Đơn hàng đang chờ thanh toán"
+                    : isReady
+                      ? "Đồ uống đã sẵn sàng lấy!"
+                      : isPreparing
+                        ? "Barista đang pha chế món của bạn!"
+                        : isCompleted
+                          ? "Đã nhận nước thành công!"
+                          : "Đặt hàng thành công!"}
             </h1>
             <p className="text-[#504440] text-base max-w-lg mb-8">
               {isCancelled ? (
                 <>
-                  Đơn hàng <strong>#BL-{order?.id ?? orderId}</strong> đã bị hủy
+                  Đơn hàng <strong>#BL-{order.id}</strong> đã bị hủy
                   hoặc hết hạn thanh toán (quá 5 phút).
+                </>
+              ) : isPaymentFailed ? (
+                <>
+                  Giao dịch cho đơn <strong>#BL-{order.id}</strong> chưa
+                  thành công. Nguyên liệu vẫn đang được giữ tạm — bạn có thể thử thanh
+                  toán lại hoặc hủy đơn hàng.
+                </>
+              ) : isPending ? (
+                <>
+                  Đơn hàng <strong>#BL-{order.id}</strong> đang chờ
+                  hoàn tất thanh toán trong vòng 5 phút để chuyển xuống quầy Barista.
                 </>
               ) : isReady ? (
                 <>
@@ -472,7 +769,7 @@ function OrderConfirmationContent() {
                   <strong className="text-emerald-700">
                     Kệ Express Bar số 04
                   </strong>{" "}
-                  và đọc mã đơn <strong>#BL-{order?.id ?? orderId}</strong> để
+                  và đọc mã đơn <strong>#BL-{order.id}</strong> để
                   nhận nước ngay.
                 </>
               ) : isPreparing ? (
@@ -499,18 +796,26 @@ function OrderConfirmationContent() {
             <div
               className={`w-full bg-white rounded-3xl shadow-[0_12px_36px_-6px_rgba(44,24,16,0.08)] text-left relative overflow-hidden transition-all ${isCancelled
                 ? "ring-2 ring-[#8C3B32]/30"
-                : isReady
-                  ? "ring-2 ring-emerald-500"
-                  : ""
+                : isPaymentFailed
+                  ? "ring-2 ring-rose-300"
+                  : isPending
+                    ? "ring-2 ring-amber-300"
+                    : isReady
+                      ? "ring-2 ring-emerald-500"
+                      : ""
                 }`}
             >
               {/* Top gradient ribbon */}
               <div
                 className={`absolute top-0 left-0 right-0 h-2 ${isCancelled
                   ? "bg-gradient-to-r from-[#8C3B32] via-[#A2483E] to-[#845326]"
-                  : isReady
-                    ? "bg-gradient-to-r from-emerald-600 via-teal-500 to-emerald-400"
-                    : "bg-gradient-to-r from-[#2c1810] via-[#845326] to-[#febc85]"
+                  : isPaymentFailed
+                    ? "bg-gradient-to-r from-rose-600 via-rose-500 to-amber-500"
+                    : isPending
+                      ? "bg-gradient-to-r from-amber-500 via-amber-400 to-[#845326]"
+                      : isReady
+                        ? "bg-gradient-to-r from-emerald-600 via-teal-500 to-emerald-400"
+                        : "bg-gradient-to-r from-[#2c1810] via-[#845326] to-[#febc85]"
                   }`}
               />
 
@@ -522,7 +827,7 @@ function OrderConfirmationContent() {
                   </span>
                   <div className="flex items-baseline gap-1 mt-0.5">
                     <span className="font-headline text-4xl md:text-5xl text-[#2c1810] tracking-tighter font-bold">
-                      #BL-{order?.id ?? orderId ?? "1042"}
+                      #BL-{order.id}
                     </span>
                     <span className="text-[11px] font-bold text-[#504440] font-mono">
                       / EX-BAR 04
@@ -539,9 +844,13 @@ function OrderConfirmationContent() {
                     >
                       {isCancelled
                         ? "cancel"
-                        : isReady
-                          ? "notifications_active"
-                          : "verified"}
+                        : isPaymentFailed
+                          ? "error_outline"
+                          : isPending
+                            ? "schedule"
+                            : isReady
+                              ? "notifications_active"
+                              : "verified"}
                     </span>
                     <span>{statusInfo.label}</span>
                   </div>
@@ -562,20 +871,28 @@ function OrderConfirmationContent() {
                 <div
                   className={`mt-5 rounded-2xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 ${isCancelled
                     ? "bg-[#FAF0EE] border border-[#8C3B32]/25"
-                    : isReady
-                      ? "bg-emerald-50 border-2 border-emerald-400"
-                      : isCompleted
-                        ? "bg-emerald-50/60 border border-emerald-200"
-                        : "bg-[#f8f2ee]"
+                    : isPaymentFailed
+                      ? "bg-rose-50 border border-rose-200"
+                      : isPending
+                        ? "bg-amber-50 border border-amber-200"
+                        : isReady
+                          ? "bg-emerald-50 border-2 border-emerald-400"
+                          : isCompleted
+                            ? "bg-emerald-50/60 border border-emerald-200"
+                            : "bg-[#f8f2ee]"
                     }`}
                 >
                   <div className="flex items-start gap-3">
                     <div
                       className={`w-11 h-11 rounded-xl text-white flex items-center justify-center shrink-0 shadow-sm ${isCancelled
                         ? "bg-[#8C3B32]"
-                        : isReady || isCompleted
-                          ? "bg-emerald-600"
-                          : "bg-[#2c1810]"
+                        : isPaymentFailed
+                          ? "bg-rose-600"
+                          : isPending
+                            ? "bg-amber-500"
+                            : isReady || isCompleted
+                              ? "bg-emerald-600"
+                              : "bg-[#2c1810]"
                         }`}
                     >
                       <span
@@ -584,64 +901,88 @@ function OrderConfirmationContent() {
                       >
                         {isCancelled
                           ? "cancel"
-                          : isReady
-                            ? "notifications_active"
-                            : isCompleted
-                              ? "task_alt"
-                              : "coffee_maker"}
+                          : isPaymentFailed
+                            ? "error_outline"
+                            : isPending
+                              ? "schedule"
+                              : isReady
+                                ? "notifications_active"
+                                : isCompleted
+                                  ? "task_alt"
+                                  : "coffee_maker"}
                       </span>
                     </div>
                     <div className="flex flex-col">
                       <span className="text-[15px] font-bold text-[#2c1810] leading-snug">
                         {isCancelled
-                          ? "Đơn hàng đã bị hủy / Không hoàn tất thanh toán"
-                          : isReady
-                            ? "Mời bạn nhận đồ uống tại Kệ Express Bar số 04!"
-                            : isCompleted
-                              ? "Đã bàn giao đồ uống tại Kệ Express Bar số 04"
-                              : isPreparing
-                                ? "Barista đang pha chế đơn của bạn tại Trạm 01"
-                                : "Đơn đã gửi xuống Kệ Express Bar số 04"}
+                          ? "Đơn hàng đã bị hủy"
+                          : isPaymentFailed
+                            ? "Thanh toán chưa thành công"
+                            : isPending
+                              ? "Đơn hàng đang chờ bạn thanh toán"
+                              : isReady
+                                ? "Mời bạn nhận đồ uống tại Kệ Express Bar số 04!"
+                                : isCompleted
+                                  ? "Đã bàn giao đồ uống tại Kệ Express Bar số 04"
+                                  : isPreparing
+                                    ? "Barista đang pha chế đơn của bạn tại Trạm 01"
+                                    : "Đơn đã gửi xuống Kệ Express Bar số 04"}
                       </span>
                       <p className="text-[13px] text-[#504440] mt-0.5">
                         {isCancelled
-                          ? "Đơn hàng này không còn hiệu lực phục vụ. Quý khách vui lòng chọn món khác trong thực đơn để tạo đơn hàng mới."
-                          : isReady
-                            ? "Ly nước của bạn đã hoàn thiện và đặt sẵn trên kệ trả món Express Pickup."
-                            : isCompleted
-                              ? "Cảm ơn bạn đã thưởng thức tại BrewLite. Điểm thưởng đã được cộng vào ví!"
-                              : isPreparing
-                                ? "Barista đang đong định lượng nguyên liệu tươi và chiết xuất espresso."
-                                : "Đang chờ Barista bấm nhận đơn trên màn hình KDS (~1-2 phút)."}
+                          ? "Đơn hàng này không còn hiệu lực phục vụ. Nguyên liệu đã được hoàn trả về kho."
+                          : isPaymentFailed
+                            ? "Thanh toán trước đó bị gián đoạn hoặc thất bại. Quý khách có thể thử thanh toán lại hoặc hủy đơn hàng."
+                            : isPending
+                              ? "Đơn hàng chưa được gửi xuống Barista KDS. Vui lòng hoàn tất thanh toán trong 5 phút trước khi đơn tự động hủy."
+                              : isReady
+                                ? "Ly nước của bạn đã hoàn thiện và đặt sẵn trên kệ trả món Express Pickup."
+                                : isCompleted
+                                  ? "Cảm ơn bạn đã thưởng thức tại BrewLite. Điểm thưởng đã được cộng vào ví!"
+                                  : isPreparing
+                                    ? "Barista đang đong định lượng nguyên liệu tươi và chiết xuất espresso."
+                                    : "Đang chờ Barista bấm nhận đơn trên màn hình KDS (~1-2 phút)."}
                       </p>
                     </div>
                   </div>
                   <div
                     className={`flex items-center gap-2 px-4 py-1.5 rounded-full shrink-0 self-start md:self-auto ${isCancelled
                       ? "bg-[#F5E3E0] text-[#8C3B32]"
-                      : isReady
-                        ? "bg-emerald-600 text-white"
-                        : "bg-[#f3ede9] text-[#2c1810]"
+                      : isPaymentFailed
+                        ? "bg-rose-100 text-rose-800"
+                        : isPending
+                          ? "bg-amber-100 text-amber-900"
+                          : isReady
+                            ? "bg-emerald-600 text-white"
+                            : "bg-[#f3ede9] text-[#2c1810]"
                       }`}
                   >
                     <span
                       className={`w-2.5 h-2.5 rounded-full ${isCancelled
                         ? "bg-[#8C3B32]"
-                        : isReady
-                          ? "bg-white animate-pulse"
-                          : "bg-[#845326] animate-pulse"
+                        : isPaymentFailed
+                          ? "bg-rose-600"
+                          : isPending
+                            ? "bg-amber-600 animate-pulse"
+                            : isReady
+                              ? "bg-white animate-pulse"
+                              : "bg-[#845326] animate-pulse"
                         }`}
                     />
                     <span className="text-[11px] font-bold">
                       {isCancelled
                         ? "ĐÃ HỦY ĐƠN"
-                        : isReady
-                          ? "SẴN SÀNG NHẬN MÓN"
-                          : isCompleted
-                            ? "ĐÃ BÀN GIAO"
-                            : isPreparing
-                              ? "ĐANG PHA CHẾ"
-                              : "CHỜ TIẾP NHẬN"}
+                        : isPaymentFailed
+                          ? "THANH TOÁN THẤT BẠI"
+                          : isPending
+                            ? "CHỜ THANH TOÁN"
+                            : isReady
+                              ? "SẴN SÀNG NHẬN MÓN"
+                              : isCompleted
+                                ? "ĐÃ BÀN GIAO"
+                                : isPreparing
+                                  ? "ĐANG PHA CHẾ"
+                                  : "CHỜ TIẾP NHẬN"}
                     </span>
                   </div>
                 </div>
@@ -650,12 +991,16 @@ function OrderConfirmationContent() {
                 <div className="mt-5">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-[11px] font-semibold text-[#2c1810] uppercase tracking-wider">
-                      {isCancelled
+                      {isCancelled || isUnpaid
                         ? "Trạng thái xử lý đơn hàng"
                         : "Tiến trình pha chế trực tiếp (Đồng bộ thời gian thực)"}
                     </span>
                     <span className="text-[11px] text-[#504440]">
-                      {isCancelled ? "Hệ thống tự động" : (order as any)?.staffName ? `Barista: ${(order as any).staffName} • Trạm #01` : "Trạm Barista KDS #01"}
+                      {isCancelled || isUnpaid
+                        ? "Hệ thống tự động"
+                        : order?.staffName
+                          ? `Barista: ${order.staffName} • Trạm #01`
+                          : "Trạm Barista KDS #01"}
                     </span>
                   </div>
                   {isCancelled ? (
@@ -690,6 +1035,66 @@ function OrderConfirmationContent() {
                             block
                           </span>
                           <span>3. Kết thúc đơn</span>
+                        </div>
+                      </div>
+                    </div>
+                  ) : isPaymentFailed ? (
+                    <div className="grid grid-cols-3 gap-2 pt-1">
+                      <div className="flex flex-col gap-1.5">
+                        <div className="h-2.5 rounded-full bg-amber-500" />
+                        <div className="flex items-center gap-1 text-[11px] font-bold text-amber-800">
+                          <span className="material-symbols-outlined text-sm text-amber-600">
+                            inventory_2
+                          </span>
+                          <span>1. Đã giữ nguyên liệu</span>
+                        </div>
+                      </div>
+                      <div className="flex flex-col gap-1.5">
+                        <div className="h-2.5 rounded-full bg-rose-600" />
+                        <div className="flex items-center gap-1 text-[11px] font-bold text-rose-700">
+                          <span className="material-symbols-outlined text-sm text-rose-600">
+                            error_outline
+                          </span>
+                          <span>2. Thanh toán thất bại</span>
+                        </div>
+                      </div>
+                      <div className="flex flex-col gap-1.5">
+                        <div className="h-2.5 rounded-full bg-[#ede7e3]" />
+                        <div className="flex items-center gap-1 text-[11px] font-bold text-[#827470]">
+                          <span className="material-symbols-outlined text-sm text-[#827470]">
+                            refresh
+                          </span>
+                          <span>3. Thử lại hoặc Hủy đơn</span>
+                        </div>
+                      </div>
+                    </div>
+                  ) : isPending ? (
+                    <div className="grid grid-cols-3 gap-2 pt-1">
+                      <div className="flex flex-col gap-1.5">
+                        <div className="h-2.5 rounded-full bg-amber-500" />
+                        <div className="flex items-center gap-1 text-[11px] font-bold text-amber-800">
+                          <span className="material-symbols-outlined text-sm text-amber-600">
+                            inventory_2
+                          </span>
+                          <span>1. Đã giữ nguyên liệu</span>
+                        </div>
+                      </div>
+                      <div className="flex flex-col gap-1.5">
+                        <div className="h-2.5 rounded-full bg-amber-300 animate-pulse" />
+                        <div className="flex items-center gap-1 text-[11px] font-bold text-amber-800">
+                          <span className="material-symbols-outlined text-sm text-amber-600">
+                            schedule
+                          </span>
+                          <span>2. Chờ thanh toán</span>
+                        </div>
+                      </div>
+                      <div className="flex flex-col gap-1.5 opacity-60">
+                        <div className="h-2.5 rounded-full bg-[#ede7e3]" />
+                        <div className="flex items-center gap-1 text-[11px] font-bold text-[#827470]">
+                          <span className="material-symbols-outlined text-sm text-[#827470]">
+                            coffee_maker
+                          </span>
+                          <span>3. Chuyển xuống Barista</span>
                         </div>
                       </div>
                     </div>
@@ -781,6 +1186,62 @@ function OrderConfirmationContent() {
                     </div>
                   )}
                 </div>
+
+                {actionError && (
+                  <div
+                    role="alert"
+                    className="mt-4 rounded-xl border border-rose-300 bg-rose-50 px-4 py-3 text-xs font-semibold text-rose-800 flex items-start justify-between gap-3"
+                  >
+                    <div className="flex items-start gap-2">
+                      <span className="material-symbols-outlined text-base text-rose-600 shrink-0">
+                        error
+                      </span>
+                      <span>{actionError}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setActionError(null)}
+                      className="text-rose-600 hover:text-rose-900 font-bold cursor-pointer"
+                      aria-label="Đóng thông báo lỗi"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                )}
+
+                {(isPending || isPaymentFailed) && order && (
+                  <div className="mt-5 flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-3 pt-4 border-t border-[#f3ede9]">
+                    <button
+                      type="button"
+                      onClick={() => setConfirmCancelModal(true)}
+                      disabled={Boolean(actionBusy)}
+                      className="px-5 py-3 rounded-xl font-semibold text-[13px] text-[#8C3B32] bg-[#FAF0EE] hover:bg-[#F5E5E2] border border-[#8C3B32]/30 transition-all cursor-pointer active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {actionBusy === "cancel" ? "Đang hủy đơn..." : "Hủy đơn hàng"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handlePayOrRetry}
+                      disabled={Boolean(actionBusy)}
+                      className={`inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-bold text-[13px] text-white transition-all cursor-pointer active:scale-95 shadow-md disabled:opacity-50 disabled:cursor-not-allowed ${
+                        isPaymentFailed
+                          ? "bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-700 hover:to-amber-700 shadow-rose-500/20"
+                          : "bg-gradient-to-r from-[#845326] to-[#5a3312] hover:from-[#9b612d] hover:to-[#6d3e17] text-[#ffdcc2] shadow-[#2c1810]/20"
+                      }`}
+                    >
+                      <span className="material-symbols-outlined text-base">
+                        {isPaymentFailed ? "refresh" : "payments"}
+                      </span>
+                      <span>
+                        {actionBusy === "retry"
+                          ? "Đang xử lý..."
+                          : isPaymentFailed
+                            ? "Thử lại thanh toán"
+                            : "Thanh toán ngay"}
+                      </span>
+                    </button>
+                  </div>
+                )}
 
                 {/* Dashed ticket cut-line */}
                 <div className="relative my-6 -mx-6 sm:-mx-8 py-2">
@@ -966,45 +1427,34 @@ function OrderConfirmationContent() {
                   <div className="flex justify-between text-[#504440]">
                     <span>Tạm tính đồ uống</span>
                     <span className="font-medium text-[#1d1b19]">
-                      {vnd(
-                        order?.items?.reduce((s, i) => s + i.unitPrice * i.quantity, 0) ||
-                          order?.totalAmount ||
-                          0
-                      )}
+                      {vnd(receiptSubtotal)}
                     </span>
                   </div>
-                  {Boolean(order?.discountAmount && order.discountAmount > 0) && (
+                  {discountAmount > 0 && (
                     <div className="flex justify-between text-[#b45309] font-medium">
                       <span className="flex items-center gap-1.5 leading-none">
                         <span className="leading-none">{"Khuyến mãi".normalize("NFC")}</span>
-                        {order?.discountCode && (
+                        {order.discountCode && (
                           <span className="inline-flex items-center justify-center text-[10px] bg-[#fef3c7] text-[#92400e] px-1.5 py-0.5 rounded font-mono font-bold leading-none border border-[#fde68a]">
                             {order.discountCode}
                           </span>
                         )}
                       </span>
-                      <span className="font-bold">-{vnd(order?.discountAmount || 0)}</span>
+                      <span className="font-bold">-{vnd(discountAmount)}</span>
                     </div>
                   )}
                   <div className="flex justify-between text-[#504440]">
                     <span>Phí ly & đóng gói Eco</span>
                     <span className="text-[#2c1810] font-medium">0đ (Miễn phí)</span>
                   </div>
-                  <div className="flex justify-between text-[#504440]">
-                    <span>Thuế VAT (8%)</span>
-                    <span className="font-medium text-stone-700">
-                      {vnd(
-                        Math.floor(
-                          Math.max(
-                            0,
-                            (order?.items?.reduce((s, i) => s + i.unitPrice * i.quantity, 0) ||
-                              order?.totalAmount ||
-                              0) - (order?.discountAmount || 0)
-                          ) * 0.08
-                        )
-                      )}
-                    </span>
-                  </div>
+                  {hasChargedVat && (
+                    <div className="flex justify-between text-[#504440]">
+                      <span>Thuế VAT (8%)</span>
+                      <span className="font-medium text-stone-700">
+                        {vnd(expectedVat)}
+                      </span>
+                    </div>
+                  )}
                   <div className="flex justify-between items-baseline pt-2 border-t border-[#e7e1dd]">
                     <div>
                       <div className="flex items-center gap-1.5">
@@ -1018,7 +1468,7 @@ function OrderConfirmationContent() {
                     </div>
                     <div className="flex items-baseline gap-1 text-right">
                       <span className="font-headline text-[26px] leading-8 font-bold text-[#2c1810]">
-                        {vnd(order?.totalAmount ?? 0)}
+                        {vnd(order.totalAmount ?? 0)}
                       </span>
                     </div>
                   </div>
@@ -1032,6 +1482,16 @@ function OrderConfirmationContent() {
                         <span>Điểm thưởng:</span>
                       </div>
                       <span>Không tích lũy do đơn hàng đã bị hủy</span>
+                    </div>
+                  ) : isUnpaid ? (
+                    <div className="pt-2 flex items-center justify-between text-amber-800 text-[11px] font-semibold bg-amber-50 px-4 py-1.5 rounded-lg border border-amber-200">
+                      <div className="flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-base text-amber-600">
+                          schedule
+                        </span>
+                        <span>Điểm thưởng:</span>
+                      </div>
+                      <span>Chưa thanh toán • Sẽ cộng sau khi thanh toán thành công</span>
                     </div>
                   ) : (
                     <div className="pt-2 flex items-center justify-between text-[#78491d] text-[11px] font-semibold bg-[#ffdcc2]/50 px-4 py-1.5 rounded-lg">
@@ -1115,6 +1575,50 @@ function OrderConfirmationContent() {
           </div>
         </div>
       </main>
+
+      {confirmCancelModal && order && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-2xl border border-[#e7e1dd] flex flex-col gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-[#FAF0EE] flex items-center justify-center text-[#8C3B32] shrink-0">
+                <span className="material-symbols-outlined text-xl">cancel</span>
+              </div>
+              <div>
+                <h4 className="font-headline font-bold text-[15px] text-[#1d1b19]">
+                  Xác nhận hủy đơn hàng
+                </h4>
+                <p className="text-[11px] text-[#504440]">
+                  Nguyên liệu đã giữ sẽ được hoàn trả về kho
+                </p>
+              </div>
+            </div>
+
+            <p className="text-[13px] text-[#504440] leading-relaxed">
+              Bạn có chắc chắn muốn hủy đơn hàng{" "}
+              <strong className="text-[#2c1810]">#BL-{order.id}</strong> không?
+            </p>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-[#f3ede9]">
+              <button
+                type="button"
+                onClick={() => setConfirmCancelModal(false)}
+                disabled={actionBusy === "cancel"}
+                className="px-4 py-2 text-[13px] font-medium text-[#504440] hover:text-[#1d1b19] hover:bg-[#f3ede9] rounded-xl transition-colors cursor-pointer disabled:opacity-50"
+              >
+                Giữ lại
+              </button>
+              <button
+                type="button"
+                onClick={handleCancelOrder}
+                disabled={actionBusy === "cancel"}
+                className="px-4 py-2 text-[13px] font-bold text-white bg-[#8C3B32] hover:bg-[#6E2822] rounded-xl transition-colors shadow-xs cursor-pointer active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {actionBusy === "cancel" ? "Đang hủy..." : "Xác nhận hủy đơn"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <Footer />
     </div>

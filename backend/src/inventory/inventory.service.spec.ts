@@ -161,6 +161,77 @@ describe('InventoryService — Sprint 4 (Admin BOM Warehouse, Full CRUD & Optimi
     ).rejects.toThrow(NotFoundException);
   });
 
+  it('cập nhật nguyên vật liệu (updateIngredient) sử dụng CAS Guard tăng version', async () => {
+    mockPrisma.ingredient.findUnique
+      .mockResolvedValueOnce({
+        id: 1,
+        code: 'ING_ROBUSTA',
+        name: 'Hạt Cà phê Robusta',
+        unit: 'g',
+        stock: 500,
+        minThreshold: 500,
+        costPerUnit: 100,
+        type: 'INGREDIENT',
+        isRequiredForSale: true,
+        version: 2,
+      })
+      .mockResolvedValueOnce({
+        id: 1,
+        code: 'ING_ROBUSTA_SPECIAL',
+        name: 'Hạt Cà phê Robusta Đặc Biệt',
+        unit: 'g',
+        stock: 800,
+        minThreshold: 500,
+        costPerUnit: 120,
+        type: 'INGREDIENT',
+        isRequiredForSale: true,
+        version: 3,
+      });
+
+    mockPrisma.ingredient.updateMany.mockResolvedValue({ count: 1 });
+
+    const res = await service.updateIngredient(1, {
+      name: 'Hạt Cà phê Robusta Đặc Biệt',
+      stock: 800,
+      costPerUnit: 120,
+    });
+
+    expect(mockPrisma.ingredient.updateMany).toHaveBeenCalledWith({
+      where: { id: 1, version: 2 },
+      data: expect.objectContaining({
+        name: 'Hạt Cà phê Robusta Đặc Biệt',
+        stock: 800,
+        costPerUnit: 120,
+        version: { increment: 1 },
+      }),
+    });
+    expect(res.stock).toBe(800);
+    expect(res.version).toBe(3);
+  });
+
+  it('ném ConflictException khi updateIngredient bị xung đột version (Optimistic Lock Conflict - CRITICAL-08)', async () => {
+    mockPrisma.ingredient.findUnique.mockResolvedValue({
+      id: 1,
+      code: 'ING_ROBUSTA',
+      name: 'Hạt Cà phê Robusta',
+      unit: 'g',
+      stock: 500,
+      minThreshold: 500,
+      version: 2,
+    });
+    mockPrisma.ingredient.updateMany.mockResolvedValue({ count: 0 });
+
+    await expect(
+      service.updateIngredient(1, { stock: 1000 }),
+    ).rejects.toThrow(ConflictException);
+
+    await expect(
+      service.updateIngredient(1, { stock: 1000 }),
+    ).rejects.toThrow(
+      'Xung đột cập nhật tồn kho (Optimistic Lock Conflict). Dữ liệu vừa bị thay đổi bởi tiến trình khác, vui lòng tải lại.',
+    );
+  });
+
   it('cho phép Admin thêm nguyên vật liệu mới (createIngredient) và chặn trùng mã code', async () => {
     mockPrisma.ingredient.findUnique.mockResolvedValueOnce(null);
     mockPrisma.ingredient.create.mockResolvedValue({
@@ -387,6 +458,75 @@ describe('InventoryService — Sprint 4 (Admin BOM Warehouse, Full CRUD & Optimi
       });
       const validErrors = await validate(validUpdate);
       expect(validErrors.length).toBe(0);
+    });
+  });
+
+  describe('FE-I4 — getDashboardStats expires stale >5m PENDING/PAYMENT_FAILED orders', () => {
+    it('cancels stale >5m PENDING orders via $transaction before reading recentOrders', async () => {
+      const staleOrder = {
+        id: 501,
+        status: 'PENDING',
+        discountCode: null,
+        voucherDeducted: false,
+        createdAt: new Date(Date.now() - 6 * 60 * 1000),
+        items: [{ productId: 1, size: 'M', toppings: [], quantity: 1 }],
+      };
+
+      const mockTx = {
+        order: {
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+        inventoryLog: {
+          findMany: vi.fn().mockResolvedValue([
+            {
+              ingredientId: 1,
+              ingredientName: 'Robusta',
+              unit: 'g',
+              changeAmount: -25,
+            },
+          ]),
+          create: vi.fn().mockResolvedValue({}),
+        },
+        ingredient: {
+          update: vi.fn().mockResolvedValue({
+            id: 1,
+            name: 'Robusta',
+            unit: 'g',
+            stock: 1025,
+          }),
+        },
+      };
+
+      mockPrisma.$transaction = vi.fn(async (cb: any) => cb(mockTx));
+      mockPrisma.order.findMany
+        .mockResolvedValueOnce([staleOrder])
+        .mockResolvedValueOnce([
+          {
+            id: 501,
+            status: 'CANCELLED',
+            totalAmount: 45000,
+            createdAt: staleOrder.createdAt,
+            items: [],
+            user: null,
+          },
+        ]);
+      mockPrisma.ingredient.findMany.mockResolvedValue([]);
+      mockPrisma.storeSetting.findMany.mockResolvedValue([]);
+      mockPrisma.discountCode.findMany.mockResolvedValue([]);
+      mockPrisma.inventoryLog.findMany.mockResolvedValue([]);
+      mockPrisma.recipe.findMany = vi.fn().mockResolvedValue([]);
+
+      const stats = await service.getDashboardStats();
+
+      expect(mockPrisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(mockTx.order.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 501, status: 'PENDING' },
+          data: expect.objectContaining({ status: 'CANCELLED' }),
+        }),
+      );
+      expect(mockTx.ingredient.update).toHaveBeenCalled();
+      expect(stats.recentOrders[0].status).toBe('CANCELLED');
     });
   });
 });

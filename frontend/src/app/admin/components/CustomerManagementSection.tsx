@@ -196,8 +196,14 @@ export default function CustomerManagementSection({
       showToast("Vui lòng nhập họ và tên khách hàng");
       return;
     }
-    if (!createEmail.trim() || !createEmail.includes("@")) {
-      showToast("Vui lòng nhập địa chỉ email hợp lệ");
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!createEmail.trim() || !emailRegex.test(createEmail.trim())) {
+      showToast("Vui lòng nhập địa chỉ email hợp lệ (ví dụ: customer@brewlite.vn)");
+      return;
+    }
+    const phoneRegex = /^(0[3|5|7|8|9])[0-9]{8}$/;
+    if (createPhone.trim() && !phoneRegex.test(createPhone.trim())) {
+      showToast("Số điện thoại không hợp lệ (cần 10 số, bắt đầu bằng 03, 05, 07, 08, 09)");
       return;
     }
 
@@ -248,6 +254,11 @@ export default function CustomerManagementSection({
 
     if (!editFullName.trim()) {
       showToast("Vui lòng nhập họ và tên khách hàng");
+      return;
+    }
+    const phoneRegex = /^(0[3|5|7|8|9])[0-9]{8}$/;
+    if (editPhone.trim() && !phoneRegex.test(editPhone.trim())) {
+      showToast("Số điện thoại không hợp lệ (cần 10 số, bắt đầu bằng 03, 05, 07, 08, 09)");
       return;
     }
 

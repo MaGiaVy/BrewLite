@@ -13,16 +13,19 @@ import {
 export class RestockIngredientDto {
   @IsNumber()
   @Min(0.1, { message: 'Số lượng nhập thêm phải lớn hơn 0' })
+  @Max(100000000, { message: 'Số lượng nhập thêm không vượt quá 100.000.000' })
   addAmount: number;
 
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Max(1000000000, { message: 'Đơn giá không vượt quá 1.000.000.000' })
   unitCost?: number;
 
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Max(10000000000, { message: 'Tổng tiền không vượt quá 10.000.000.000' })
   totalCost?: number;
 
   @IsOptional()
@@ -33,20 +36,26 @@ export class RestockIngredientDto {
 export class UpdateIngredientStockDto {
   @IsNumber()
   @Min(0, { message: 'Tồn kho không được âm' })
+  @Max(100000000, { message: 'Tồn kho không vượt quá 100.000.000' })
   stock: number;
 
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Max(100000000, { message: 'Ngưỡng cảnh báo không vượt quá 100.000.000' })
   minThreshold?: number;
 
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Max(1000000000, { message: 'Đơn giá không vượt quá 1.000.000.000' })
   costPerUnit?: number;
 
   @IsOptional()
   @IsString()
+  @IsIn(['INGREDIENT', 'PACKAGING'], {
+    message: 'Loại nguyên vật liệu phải là INGREDIENT hoặc PACKAGING',
+  })
   type?: string;
 
   @IsOptional()
@@ -73,19 +82,25 @@ export class CreateIngredientDto {
 
   @IsNumber()
   @Min(0, { message: 'Tồn kho ban đầu không được âm' })
+  @Max(100000000, { message: 'Tồn kho không vượt quá 100.000.000' })
   stock: number;
 
   @IsNumber()
   @Min(0, { message: 'Ngưỡng cảnh báo không được âm' })
+  @Max(100000000, { message: 'Ngưỡng cảnh báo không vượt quá 100.000.000' })
   minThreshold: number;
 
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Max(1000000000, { message: 'Đơn giá không vượt quá 1.000.000.000' })
   costPerUnit?: number;
 
   @IsOptional()
   @IsString()
+  @IsIn(['INGREDIENT', 'PACKAGING'], {
+    message: 'Loại nguyên vật liệu phải là INGREDIENT hoặc PACKAGING',
+  })
   type?: string;
 
   @IsOptional()
@@ -112,20 +127,26 @@ export class UpdateIngredientDto {
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Max(100000000, { message: 'Tồn kho không vượt quá 100.000.000' })
   stock?: number;
 
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Max(100000000, { message: 'Ngưỡng cảnh báo không vượt quá 100.000.000' })
   minThreshold?: number;
 
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Max(1000000000, { message: 'Đơn giá không vượt quá 1.000.000.000' })
   costPerUnit?: number;
 
   @IsOptional()
   @IsString()
+  @IsIn(['INGREDIENT', 'PACKAGING'], {
+    message: 'Loại nguyên vật liệu phải là INGREDIENT hoặc PACKAGING',
+  })
   type?: string;
 
   @IsOptional()

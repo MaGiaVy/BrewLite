@@ -2,6 +2,7 @@
 
 import React, { Suspense, useEffect, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
 import Image from "next/image";
 import {
   ShieldCheck,
@@ -12,12 +13,13 @@ import {
   Wallet,
   Building2,
   Sparkles,
+  ArrowLeft,
   ArrowRight,
   RefreshCw,
   PlusCircle,
   RotateCcw,
   X,
-  CreditCard,
+  XCircle,
 } from "lucide-react";
 import { apiFetch, useAuthStore } from "../../store/authStore";
 import { useCartStore } from "../../store/cartStore";
@@ -31,28 +33,93 @@ function vnd(amount: number): string {
 
 const DEFAULT_BALANCE = 1000000; // 1.000.000đ mặc định
 const BALANCE_STORAGE_KEY = "zalopay_sandbox_wallet_balance";
+const GATEWAY_TTL_SECONDS = 300; // 5 phút đồng bộ theo TTL backend
+const ACTIVE_PENDING_ORDER_KEY = "brewlite_active_pending_order";
+const EXPIRY_SYNC_BACKOFF_MS = [1200, 2500, 4000] as const;
+const PAID_ORDER_STATUSES: ReadonlySet<string> = new Set([
+  "PAID",
+  "PREPARING",
+  "READY",
+  "COMPLETED",
+]);
+
+function clearActivePendingOrder(targetOrderId?: number) {
+  if (typeof window === "undefined") return;
+  for (const storage of [window.sessionStorage, window.localStorage]) {
+    try {
+      const raw = storage.getItem(ACTIVE_PENDING_ORDER_KEY);
+      if (!raw) continue;
+      if (targetOrderId !== undefined) {
+        let storedId: number | null = Number(raw);
+        if (Number.isNaN(storedId)) {
+          const parsed = JSON.parse(raw) as { orderId?: unknown } | null;
+          storedId = parsed && typeof parsed === "object" ? Number(parsed.orderId) : null;
+        }
+        if (storedId !== null && !Number.isNaN(storedId) && storedId !== targetOrderId) {
+          continue;
+        }
+      }
+      storage.removeItem(ACTIVE_PENDING_ORDER_KEY);
+    } catch {
+      try {
+        storage.removeItem(ACTIVE_PENDING_ORDER_KEY);
+      } catch {
+        // ignore storage access errors
+      }
+    }
+  }
+}
+
+interface GatewayOrderInfo {
+  id: number;
+  status: string;
+  totalAmount: number;
+  createdAt: string;
+}
+
+function calcRemainingFromCreatedAt(createdAt?: string): number {
+  if (!createdAt) return GATEWAY_TTL_SECONDS;
+  const createdMs = new Date(createdAt).getTime();
+  if (Number.isNaN(createdMs)) return GATEWAY_TTL_SECONDS;
+  return Math.max(0, GATEWAY_TTL_SECONDS - Math.floor((Date.now() - createdMs) / 1000));
+}
+
+function extractGatewayErrorMessage(data: unknown, fallback: string): string {
+  if (!data || typeof data !== "object") return fallback;
+  const msg = (data as { message?: unknown }).message;
+  if (Array.isArray(msg)) {
+    const joined = msg.filter((m): m is string => typeof m === "string").join(", ");
+    return joined || fallback;
+  }
+  return typeof msg === "string" && msg.trim() ? msg : fallback;
+}
 
 function ZaloPayGatewayContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const clearCart = useCartStore((s) => s.clearCart);
-  const { user } = useAuthStore();
+  const { user, isAuthenticated, _hasHydrated } = useAuthStore();
 
   // Lấy các tham số từ URL
   const orderId = Number(searchParams.get("orderId")) || 0;
   const initialAmount = Number(searchParams.get("amount")) || 0;
-  const appTransId =
-    searchParams.get("appTransId") ||
-    `261024_${orderId}_${Math.floor(100000 + Math.random() * 900000)}`;
+  const [fallbackAppTransId] = useState(
+    () => `261024_${orderId}_${Math.floor(100000 + Math.random() * 900000)}`
+  );
+  const appTransId = searchParams.get("appTransId") || fallbackAppTransId;
   const token = searchParams.get("token") || "";
 
-  // State quản lý luồng thanh toán
-  const [amount] = useState(initialAmount);
+  // State quản lý luồng thanh toán & đồng bộ đơn hàng thực tế
+  const [orderInfo, setOrderInfo] = useState<GatewayOrderInfo | null>(null);
+  const amount = orderInfo?.totalAmount ?? initialAmount;
   const [walletBalance, setWalletBalance] = useState<number>(DEFAULT_BALANCE);
-  const [timeLeft, setTimeLeft] = useState(900); // 15 phút đếm ngược
+  const [timeLeft, setTimeLeft] = useState(GATEWAY_TTL_SECONDS); // 5 phút (300s) đếm ngược
   const [status, setStatus] = useState<"READY" | "PROCESSING" | "SUCCESS" | "FAILED">("READY");
+  const [isCancelling, setIsCancelling] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [redirectCountdown, setRedirectCountdown] = useState(3);
+  const [expirySyncExhaustedKey, setExpirySyncExhaustedKey] = useState<string | null>(null);
+  const [isRefreshingStatus, setIsRefreshingStatus] = useState(false);
   const [, startTransition] = useTransition();
 
   // State Nạp tiền vào ví
@@ -64,30 +131,209 @@ function ZaloPayGatewayContent() {
   const accountHolder = user?.fullName || "MÃ GIA VỸ (ZaloPay Sandbox User)";
   const accountPhone = user?.phone || "0901***001";
 
+  // Kiểm tra đăng nhập
+  useEffect(() => {
+    if (_hasHydrated && !isAuthenticated) {
+      const redirectUrl = `/gateway/zalopay?orderId=${orderId || ""}`;
+      router.push(`/login?redirect=${encodeURIComponent(redirectUrl)}`);
+    }
+  }, [_hasHydrated, isAuthenticated, orderId, router]);
+
   // Đọc số dư từ localStorage khi mount
   useEffect(() => {
     if (typeof window === "undefined") return;
-    try {
-      const saved = localStorage.getItem(BALANCE_STORAGE_KEY);
-      if (saved !== null && !isNaN(Number(saved)) && Number(saved) >= 0) {
-        setWalletBalance(Number(saved));
-      } else {
-        localStorage.setItem(BALANCE_STORAGE_KEY, String(DEFAULT_BALANCE));
-        setWalletBalance(DEFAULT_BALANCE);
+    const timer = setTimeout(() => {
+      try {
+        const saved = localStorage.getItem(BALANCE_STORAGE_KEY);
+        if (saved !== null && !isNaN(Number(saved)) && Number(saved) >= 0) {
+          setWalletBalance(Number(saved));
+        } else {
+          localStorage.setItem(BALANCE_STORAGE_KEY, String(DEFAULT_BALANCE));
+          setWalletBalance(DEFAULT_BALANCE);
+        }
+      } catch {
+        // fallback
       }
-    } catch {
-      // fallback
-    }
+    }, 0);
+    return () => clearTimeout(timer);
   }, []);
 
-  // Đếm ngược 15 phút
+  // Tải trạng thái & createdAt thực tế của đơn hàng để đồng bộ đếm ngược 300s
   useEffect(() => {
-    if (status === "SUCCESS") return;
+    if (!_hasHydrated || !isAuthenticated || !orderId) return;
+    let cancelled = false;
+
+    const loadOrder = async () => {
+      try {
+        const res = await apiFetch(`/orders/${orderId}`);
+        const data = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!res.ok) {
+          setErrorMessage(
+            extractGatewayErrorMessage(data, `Không thể tải thông tin đơn hàng #${orderId} (${res.status})`)
+          );
+          return;
+        }
+        const loaded: GatewayOrderInfo = data;
+        setOrderInfo(loaded);
+
+        if (PAID_ORDER_STATUSES.has(loaded.status)) {
+          clearActivePendingOrder(orderId);
+          setStatus("SUCCESS");
+          return;
+        }
+
+        if (loaded.status === "CANCELLED") {
+          clearActivePendingOrder(orderId);
+          setTimeLeft(0);
+          setStatus("FAILED");
+          setErrorMessage(
+            `Đơn hàng #${orderId} đã bị hủy hoặc hết hạn thanh toán (quá 5 phút). Nguyên liệu giữ chỗ đã được hoàn trả.`
+          );
+          return;
+        }
+
+        const rem = calcRemainingFromCreatedAt(loaded.createdAt);
+        setTimeLeft(rem);
+
+        if (loaded.status === "PAYMENT_FAILED") {
+          setStatus("FAILED");
+          setErrorMessage(
+            "Đơn hàng đang ở trạng thái Thanh toán thất bại. Vui lòng quay lại Checkout và bấm \"Thử lại thanh toán\" trước khi thanh toán lại."
+          );
+        }
+      } catch {
+        // giữ fallback 300s nếu lỗi mạng tạm thời
+      }
+    };
+
+    loadOrder();
+    return () => {
+      cancelled = true;
+    };
+  }, [_hasHydrated, isAuthenticated, orderId]);
+
+  // Đếm ngược 5 phút (300s) đồng bộ theo createdAt của đơn hàng
+  useEffect(() => {
+    if (status === "SUCCESS" || orderInfo?.status === "CANCELLED") return;
+    const orderCreatedAt = orderInfo?.createdAt;
     const timer = setInterval(() => {
-      setTimeLeft((prev) => (prev > 0 ? prev - 1 : 0));
+      if (orderCreatedAt) {
+        setTimeLeft(calcRemainingFromCreatedAt(orderCreatedAt));
+      } else {
+        setTimeLeft((prev) => (prev > 0 ? prev - 1 : 0));
+      }
     }, 1000);
     return () => clearInterval(timer);
-  }, [status]);
+  }, [status, orderInfo?.createdAt, orderInfo?.status]);
+
+  const isAwaitingExpirySync =
+    timeLeft <= 0 &&
+    status !== "SUCCESS" &&
+    Boolean(orderId) &&
+    _hasHydrated &&
+    isAuthenticated &&
+    (!orderInfo || orderInfo.status === "PENDING" || orderInfo.status === "PAYMENT_FAILED");
+
+  const showExpiryRefreshPrompt =
+    isAwaitingExpirySync && expirySyncExhaustedKey === String(orderId);
+
+  // Khi hết thời gian 5 phút, kiểm tra lại trạng thái thực tế từ backend với bounded backoff (1.2s -> 2.5s -> 4s)
+  useEffect(() => {
+    if (!isAwaitingExpirySync) {
+      return;
+    }
+
+    let cancelled = false;
+    let activeTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const attemptSync = (attemptIndex: number) => {
+      if (cancelled) return;
+      if (attemptIndex >= EXPIRY_SYNC_BACKOFF_MS.length) {
+        setExpirySyncExhaustedKey(String(orderId));
+        return;
+      }
+
+      activeTimer = setTimeout(async () => {
+        if (cancelled) return;
+        try {
+          const res = await apiFetch(`/orders/${orderId}`);
+          if (cancelled) return;
+          if (res.ok) {
+            const data: GatewayOrderInfo = await res.json();
+            if (cancelled) return;
+            setOrderInfo(data);
+            if (PAID_ORDER_STATUSES.has(data.status)) {
+              clearActivePendingOrder(orderId);
+              setStatus("SUCCESS");
+              return;
+            }
+            if (data.status === "CANCELLED") {
+              clearActivePendingOrder(orderId);
+              setTimeLeft(0);
+              setStatus("FAILED");
+              setErrorMessage(
+                `Đơn hàng #${orderId} đã bị hủy hoặc hết hạn thanh toán (quá 5 phút). Nguyên liệu giữ chỗ đã được hoàn trả.`
+              );
+              return;
+            }
+            if (data.status !== "PENDING" && data.status !== "PAYMENT_FAILED") {
+              return;
+            }
+          }
+        } catch {
+          // retry next backoff attempt
+        }
+        if (!cancelled) {
+          attemptSync(attemptIndex + 1);
+        }
+      }, EXPIRY_SYNC_BACKOFF_MS[attemptIndex]);
+    };
+
+    attemptSync(0);
+
+    return () => {
+      cancelled = true;
+      if (activeTimer) clearTimeout(activeTimer);
+    };
+  }, [isAwaitingExpirySync, orderId]);
+
+  const handleManualExpiryRefresh = async () => {
+    if (!orderId || isRefreshingStatus) return;
+    setIsRefreshingStatus(true);
+    setExpirySyncExhaustedKey(null);
+    try {
+      const res = await apiFetch(`/orders/${orderId}`);
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data) {
+        setExpirySyncExhaustedKey(String(orderId));
+        return;
+      }
+      const refreshed = data as GatewayOrderInfo;
+      setOrderInfo(refreshed);
+      if (PAID_ORDER_STATUSES.has(refreshed.status)) {
+        clearActivePendingOrder(orderId);
+        setStatus("SUCCESS");
+        return;
+      }
+      if (refreshed.status === "CANCELLED") {
+        clearActivePendingOrder(orderId);
+        setTimeLeft(0);
+        setStatus("FAILED");
+        setErrorMessage(
+          `Đơn hàng #${orderId} đã bị hủy hoặc hết hạn thanh toán (quá 5 phút). Nguyên liệu giữ chỗ đã được hoàn trả.`
+        );
+        return;
+      }
+      if (refreshed.status === "PENDING" || refreshed.status === "PAYMENT_FAILED") {
+        setExpirySyncExhaustedKey(String(orderId));
+      }
+    } catch {
+      setExpirySyncExhaustedKey(String(orderId));
+    } finally {
+      setIsRefreshingStatus(false);
+    }
+  };
 
   // Format mm:ss
   const formatTime = (seconds: number) => {
@@ -150,7 +396,29 @@ function ZaloPayGatewayContent() {
 
   // Hành động 1: Xác nhận thanh toán qua ZaloPay
   const handleConfirmPayment = async () => {
-    if (status === "PROCESSING" || status === "SUCCESS") return;
+    if (status === "PROCESSING" || status === "SUCCESS" || isCancelling) return;
+
+    if (!orderId) {
+      setStatus("FAILED");
+      setErrorMessage("Không tìm thấy mã đơn hàng hợp lệ để xác nhận thanh toán.");
+      return;
+    }
+
+    if (timeLeft <= 0 || orderInfo?.status === "CANCELLED") {
+      setStatus("FAILED");
+      setErrorMessage(
+        "Đơn hàng đã hết hạn thanh toán (quá 5 phút) hoặc đã bị hủy. Vui lòng quay lại Checkout hoặc xem Lịch sử đơn hàng."
+      );
+      return;
+    }
+
+    if (orderInfo?.status === "PAYMENT_FAILED") {
+      setStatus("FAILED");
+      setErrorMessage(
+        "Đơn hàng đang ở trạng thái Thanh toán thất bại. Vui lòng quay lại Checkout và bấm \"Thử lại thanh toán\" trước."
+      );
+      return;
+    }
 
     // KIỂM TRA ĐIỀU KIỆN SỐ DƯ VÍ
     if (amount > walletBalance) {
@@ -189,10 +457,36 @@ function ZaloPayGatewayContent() {
             localStorage.setItem(BALANCE_STORAGE_KEY, String(newBal));
           } catch {}
         }
+        clearActivePendingOrder(orderId);
         setStatus("SUCCESS");
       } else {
         setStatus("FAILED");
-        setErrorMessage(data.message || "Xác thực giao dịch từ máy chủ ZaloPay thất bại");
+        const fallbackMsg =
+          res.status === 403
+            ? "Bạn không có quyền xác nhận giao dịch này hoặc cổng Sandbox đang bị giới hạn truy cập (403)."
+            : res.status === 409
+            ? "Trạng thái đơn hàng vừa thay đổi bởi thao tác khác. Vui lòng kiểm tra lại trạng thái đơn hàng."
+            : res.status === 400
+            ? "Đơn hàng đã hết hạn thanh toán (quá 5 phút) hoặc trạng thái không hợp lệ."
+            : "Xác thực giao dịch từ máy chủ ZaloPay thất bại";
+        setErrorMessage(extractGatewayErrorMessage(data, fallbackMsg));
+
+        if (res.status === 400 || res.status === 409) {
+          const refreshRes = await apiFetch(`/orders/${orderId}`).catch(() => null);
+          if (refreshRes && refreshRes.ok) {
+            const refreshed: GatewayOrderInfo = await refreshRes.json().catch(() => null);
+            if (refreshed) {
+              setOrderInfo(refreshed);
+              if (refreshed.status === "CANCELLED") {
+                clearActivePendingOrder(orderId);
+                setTimeLeft(0);
+              } else if (PAID_ORDER_STATUSES.has(refreshed.status)) {
+                clearActivePendingOrder(orderId);
+                setStatus("SUCCESS");
+              }
+            }
+          }
+        }
       }
     } catch (err: unknown) {
       setStatus("FAILED");
@@ -202,20 +496,59 @@ function ZaloPayGatewayContent() {
     }
   };
 
-  // Hành động 2: Hủy giao dịch và quay về Checkout
-  const handleCancel = async () => {
+  // Hành động 2A: Hủy đơn thực sự & hoàn kho, sau đó quay về Checkout với ?canceled=true
+  const handleCancelAndRefund = async () => {
+    if (!orderId || status === "PROCESSING" || isCancelling) return;
+    setIsCancelling(true);
+    setErrorMessage("");
     try {
-      await apiFetch("/payments/zalopay/cancel", {
+      const res = await apiFetch("/payments/zalopay/cancel", {
         method: "POST",
         body: JSON.stringify({ orderId }),
       });
-    } catch {
-      // bỏ qua lỗi nếu có
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setErrorMessage(
+          extractGatewayErrorMessage(data, `Không thể hủy đơn hàng #${orderId} (${res.status})`)
+        );
+        const refreshRes = await apiFetch(`/orders/${orderId}`).catch(() => null);
+        if (refreshRes && refreshRes.ok) {
+          const refreshed: GatewayOrderInfo = await refreshRes.json().catch(() => null);
+          if (refreshed) {
+            setOrderInfo(refreshed);
+            if (refreshed.status === "CANCELLED") {
+              clearActivePendingOrder(orderId);
+              router.push(`/checkout?orderId=${orderId}&canceled=true`);
+              return;
+            }
+            if (PAID_ORDER_STATUSES.has(refreshed.status)) {
+              clearActivePendingOrder(orderId);
+              setStatus("SUCCESS");
+            }
+          }
+        }
+        return;
+      }
+      clearActivePendingOrder(orderId);
+      router.push(`/checkout?orderId=${orderId}&canceled=true`);
+    } catch (err: unknown) {
+      setErrorMessage(
+        err instanceof Error ? err.message : "Lỗi kết nối khi hủy giao dịch trên ZaloPay."
+      );
+    } finally {
+      setIsCancelling(false);
     }
-    router.push(`/checkout?canceled=true&orderId=${orderId}`);
+  };
+
+  // Hành động 2B: Quay lại Checkout giữ nguyên đơn 5 phút (không hủy DB)
+  const handleBackToCheckout = () => {
+    if (status === "PROCESSING" || isCancelling) return;
+    router.push(orderId ? `/checkout?orderId=${orderId}` : "/orders");
   };
 
   const isInsufficient = amount > walletBalance;
+  const isExpiredOrCancelled = timeLeft <= 0 || orderInfo?.status === "CANCELLED";
+  const isPaymentFailed = orderInfo?.status === "PAYMENT_FAILED";
 
   return (
     <div className="min-h-screen bg-[#F5F7FB] text-stone-800 flex flex-col font-sans selection:bg-[#0068FF] selection:text-white">
@@ -528,11 +861,65 @@ function ZaloPayGatewayContent() {
                     </div>
                   </div>
 
+                  {/* Thông báo hết hạn thanh toán 5 phút hoặc đơn đã hủy */}
+                  {isExpiredOrCancelled && (
+                    <div className="mb-4 p-4 bg-amber-50 border-2 border-amber-300 text-amber-950 rounded-2xl text-xs space-y-2.5">
+                      <div className="flex items-start gap-2.5">
+                        <Clock size={18} className="text-amber-700 shrink-0 mt-0.5" />
+                        <div>
+                          <p className="font-bold text-sm text-amber-900">
+                            {orderInfo?.status === "CANCELLED"
+                              ? `Đơn hàng #${orderId} đã bị hủy hoặc hết hạn`
+                              : "Đã hết thời gian giữ đơn hàng (5 phút)"}
+                          </p>
+                          <p className="text-amber-800 mt-0.5 leading-relaxed">
+                            Không thể xác nhận thanh toán qua ZaloPay sau khi hết hạn. Vui lòng quay lại BrewLite để kiểm tra đơn hoặc đặt đơn mới.
+                          </p>
+                          {showExpiryRefreshPrompt && (
+                            <p className="text-amber-900 font-semibold mt-1.5 leading-relaxed">
+                              Máy chủ chưa đồng bộ trạng thái hủy tự động. Vui lòng bấm làm mới để kiểm tra lại trạng thái đơn hàng.
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        {showExpiryRefreshPrompt && (
+                          <button
+                            type="button"
+                            onClick={handleManualExpiryRefresh}
+                            disabled={isRefreshingStatus}
+                            className="px-3.5 py-1.5 rounded-xl bg-white hover:bg-amber-100 text-amber-950 border border-amber-400 font-bold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                          >
+                            <RefreshCw size={13} className={isRefreshingStatus ? "animate-spin" : ""} />
+                            <span>{isRefreshingStatus ? "Đang kiểm tra..." : "Làm mới trạng thái"}</span>
+                          </button>
+                        )}
+                        <Link
+                          href={orderId ? `/checkout?orderId=${orderId}` : "/orders"}
+                          className="px-3.5 py-1.5 rounded-xl bg-amber-700 hover:bg-amber-800 text-white font-bold transition"
+                        >
+                          Về trang Checkout
+                        </Link>
+                        <Link
+                          href="/orders"
+                          className="px-3.5 py-1.5 rounded-xl bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 font-bold transition"
+                        >
+                          Xem Lịch sử đơn hàng
+                        </Link>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Hướng dẫn ngắn */}
                   <div className="p-3.5 bg-blue-50/80 rounded-2xl border border-blue-100 text-xs text-[#1E429F] flex items-start gap-2.5">
                     <Sparkles size={16} className="text-[#0068FF] shrink-0 mt-0.5" />
                     <span>
-                      {isInsufficient ? (
+                      {isExpiredOrCancelled ? (
+                        <>
+                          Phiên thanh toán đã đóng sau 5 phút. Bấm{" "}
+                          <strong>Về trang Checkout</strong> hoặc <strong>Xem Lịch sử đơn hàng</strong> ở trên để tiếp tục.
+                        </>
+                      ) : isInsufficient ? (
                         <>
                           Số dư ví hiện tại không đủ để trả cho đơn hàng này. Vui lòng bấm{" "}
                           <strong>+ Nạp tiền</strong> ở trên để nạp thêm và tiếp tục.
@@ -547,15 +934,22 @@ function ZaloPayGatewayContent() {
                 </div>
 
                 {/* ── CÁC NÚT HÀNH ĐỘNG ── */}
-                <div className="pt-6 space-y-3">
+                <div className="pt-6 space-y-2.5">
                   {/* NÚT CHÍNH: THANH TOÁN BẰNG VÍ ZALOPAY */}
                   <button
                     type="button"
-                    disabled={status === "PROCESSING" || isInsufficient}
+                    disabled={
+                      status === "PROCESSING" ||
+                      isCancelling ||
+                      isInsufficient ||
+                      isExpiredOrCancelled ||
+                      isPaymentFailed ||
+                      !orderId
+                    }
                     onClick={handleConfirmPayment}
-                    className={`w-full py-4 px-6 font-extrabold rounded-2xl text-base flex items-center justify-center gap-2.5 transition shadow-lg cursor-pointer transform active:scale-[0.99] ${
-                      isInsufficient
-                        ? "bg-stone-300 text-stone-500 cursor-not-allowed shadow-none"
+                    className={`w-full py-4 px-6 font-extrabold rounded-2xl text-base flex items-center justify-center gap-2.5 transition shadow-lg cursor-pointer transform active:scale-[0.99] disabled:opacity-60 disabled:cursor-not-allowed ${
+                      isInsufficient || isExpiredOrCancelled || isPaymentFailed || !orderId
+                        ? "bg-stone-300 text-stone-600 shadow-none"
                         : "bg-gradient-to-r from-[#0068FF] to-[#0050C8] hover:from-[#0050C8] hover:to-[#003B94] text-white shadow-blue-500/30"
                     }`}
                   >
@@ -563,6 +957,16 @@ function ZaloPayGatewayContent() {
                       <>
                         <RefreshCw size={18} className="animate-spin text-white" />
                         <span>Đang xử lý giao dịch qua cổng bảo mật ZaloPay...</span>
+                      </>
+                    ) : isExpiredOrCancelled ? (
+                      <>
+                        <Clock size={18} className="text-stone-600" />
+                        <span>Đơn hàng đã hết hạn / Đã hủy</span>
+                      </>
+                    ) : isPaymentFailed ? (
+                      <>
+                        <AlertCircle size={18} className="text-stone-600" />
+                        <span>Vui lòng thử lại từ Checkout</span>
                       </>
                     ) : isInsufficient ? (
                       <>
@@ -578,14 +982,40 @@ function ZaloPayGatewayContent() {
                     )}
                   </button>
 
-                  {/* NÚT PHỤ: HỦY GIAO DỊCH VÀ QUAY VỀ CHECKOUT */}
+                  {/* NÚT PHỤ 1: QUAY LẠI CHECKOUT GIỮ NGUYÊN ĐƠN 5 PHÚT (KHÔNG HỦY DB) */}
                   <button
                     type="button"
-                    disabled={status === "PROCESSING"}
-                    onClick={handleCancel}
-                    className="w-full py-3 px-4 bg-white hover:bg-stone-100 text-stone-600 hover:text-stone-900 font-semibold rounded-2xl text-xs sm:text-sm border border-stone-200 transition cursor-pointer flex items-center justify-center gap-1.5"
+                    disabled={status === "PROCESSING" || isCancelling}
+                    onClick={handleBackToCheckout}
+                    className="w-full py-3 px-4 bg-[#F2F7FF] hover:bg-[#E5EFFF] text-[#0052CC] font-bold rounded-2xl text-xs sm:text-sm border border-[#BFDBFE] transition cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    <span>Hủy giao dịch & Quay về BrewLite Coffee</span>
+                    <ArrowLeft size={15} />
+                    <span>Quay lại Checkout (giữ đơn 5 phút)</span>
+                  </button>
+
+                  {/* NÚT PHỤ 2: HỦY ĐƠN THỰC SỰ & HOÀN KHO */}
+                  <button
+                    type="button"
+                    disabled={
+                      status === "PROCESSING" ||
+                      isCancelling ||
+                      orderInfo?.status === "CANCELLED" ||
+                      !orderId
+                    }
+                    onClick={handleCancelAndRefund}
+                    className="w-full py-3 px-4 bg-white hover:bg-rose-50 text-rose-700 hover:text-rose-800 font-semibold rounded-2xl text-xs sm:text-sm border border-rose-200 transition cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isCancelling ? (
+                      <>
+                        <RefreshCw size={15} className="animate-spin" />
+                        <span>Đang hủy đơn &amp; hoàn kho...</span>
+                      </>
+                    ) : (
+                      <>
+                        <XCircle size={15} />
+                        <span>Hủy đơn &amp; Hoàn kho</span>
+                      </>
+                    )}
                   </button>
                 </div>
               </div>
