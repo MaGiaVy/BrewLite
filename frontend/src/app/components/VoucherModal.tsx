@@ -33,7 +33,7 @@ const REDEEMABLE_REWARDS: RedeemableReward[] = [
     title: "Voucher Giảm 10% Toàn Đơn",
     discountPercent: 10,
     maxDiscountAmount: 15000,
-    pointCost: 50,
+    pointCost: 10,
     minOrderAmount: 0,
   },
   {
@@ -42,7 +42,7 @@ const REDEEMABLE_REWARDS: RedeemableReward[] = [
     title: "Voucher Giảm 20% Đơn Từ 60k",
     discountPercent: 20,
     maxDiscountAmount: 25000,
-    pointCost: 100,
+    pointCost: 20,
     minOrderAmount: 60000,
   },
   {
@@ -51,7 +51,7 @@ const REDEEMABLE_REWARDS: RedeemableReward[] = [
     title: "Siêu Voucher Giảm 50% VIP",
     discountPercent: 50,
     maxDiscountAmount: 60000,
-    pointCost: 250,
+    pointCost: 50,
     minOrderAmount: 120000,
   },
 ];

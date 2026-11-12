@@ -35,6 +35,7 @@ import Footer from "../components/Footer";
 import { apiFetch, useAuthStore } from "../store/authStore";
 import { useCartStore, isBakeryProduct } from "../store/cartStore";
 import { DEFAULT_PRODUCTS } from "../utils/productUtils";
+import { isDemoToolsEnabled } from "@/lib/demo-mode";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function vnd(n: number) {
@@ -308,8 +309,10 @@ function CheckoutContent() {
   }, [order?.id]);
 
   // Form State
+  const demoToolsEnabled = isDemoToolsEnabled();
   const [selectedMethod, setSelectedMethod] = useState<SelectedPaymentType>("EWALLET");
   const [simulateFailure, setSimulateFailure] = useState(false);
+  const effectiveSimulateFailure = demoToolsEnabled && simulateFailure;
   const [isProcessing, setIsProcessing] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
   const [showCancelModal, setShowCancelModal] = useState(false);
@@ -419,7 +422,7 @@ function CheckoutContent() {
             (typeof data.returnMessage === "string" && data.returnMessage.trim()) ||
             extractApiErrorMessage(
               data,
-              "Không thể khởi tạo phiên thanh toán ZaloPay. Vui lòng thử lại hoặc chọn phương thức khác."
+              "Không thể khởi tạo phiên thanh toán ZaloPay E-Wallet. Vui lòng thử lại hoặc chọn phương thức thanh toán khác."
             );
           setErrorMessage(msg);
         }
@@ -427,8 +430,8 @@ function CheckoutContent() {
         if (active) {
           setErrorMessage(
             err instanceof Error && err.message
-              ? `Không thể kết nối cổng ZaloPay: ${err.message}`
-              : "Không thể kết nối đến máy chủ ZaloPay. Vui lòng kiểm tra mạng hoặc chọn phương thức khác."
+              ? `Không thể kết nối cổng ZaloPay E-Wallet: ${err.message}`
+              : "Không thể kết nối đến máy chủ ZaloPay E-Wallet. Vui lòng kiểm tra mạng hoặc chọn phương thức thanh toán khác."
           );
         }
       } finally {
@@ -832,7 +835,7 @@ function CheckoutContent() {
         body: JSON.stringify({
           orderId: order.id,
           method: backendMethod,
-          simulateFailure,
+          simulateFailure: effectiveSimulateFailure,
         }),
       });
 
@@ -925,8 +928,8 @@ function CheckoutContent() {
     // Giả lập quét sinh trắc học mượt mà trong 1.5 giây
     const scanTimer = setTimeout(() => {
       if (biometricCancelledRef.current) return;
-      const nextState = simulateFailure ? "FAILED" : "SUCCESS";
-      const finishDelayMs = simulateFailure ? 1200 : 700;
+      const nextState = effectiveSimulateFailure ? "FAILED" : "SUCCESS";
+      const finishDelayMs = effectiveSimulateFailure ? 1200 : 700;
       setBiometricState(nextState);
       const finishTimer = setTimeout(async () => {
         if (biometricCancelledRef.current) return;
@@ -939,6 +942,14 @@ function CheckoutContent() {
     }, 1500);
 
     biometricTimersRef.current.push(scanTimer);
+  };
+
+  const buildZaloPayGatewayUrl = () => {
+    if (!order) return "/gateway/zalopay";
+    const simulateFailureQuery = effectiveSimulateFailure ? "&simulateFailure=1" : "";
+    return `/gateway/zalopay?orderId=${order.id}&amount=${order.totalAmount}&appTransId=${encodeURIComponent(
+      zaloPayData?.appTransId || ""
+    )}&token=${encodeURIComponent(zaloPayData?.zpTransToken || "")}${simulateFailureQuery}`;
   };
 
   // Nút Hành Động Thanh Toán Chính
@@ -961,21 +972,17 @@ function CheckoutContent() {
       return;
     }
 
-    // Nếu là Ví ZaloPay: Chuyển hướng sang Cổng ZaloPay Gateway độc lập
+    // Nếu là Ví ZaloPay E-Wallet: Chuyển hướng sang Cổng ZaloPay Gateway độc lập
     if (selectedMethod === "EWALLET" && ewalletProvider === "ZALOPAY") {
       if (zaloPayLoading || !zaloPayData?.orderUrl) {
         setErrorMessage(
           zaloPayLoading
-            ? "Đang khởi tạo phiên ZaloPay, vui lòng đợi trong giây lát..."
-            : "Phiên ZaloPay chưa sẵn sàng. Vui lòng thử lại hoặc chuyển sang VietQR."
+            ? "Đang khởi tạo phiên ZaloPay E-Wallet, vui lòng đợi trong giây lát..."
+            : "Phiên thanh toán ZaloPay E-Wallet chưa sẵn sàng. Vui lòng thử lại sau giây lát hoặc chọn phương thức thanh toán khác."
         );
         return;
       }
-      router.push(
-        `/gateway/zalopay?orderId=${order.id}&amount=${order.totalAmount}&appTransId=${encodeURIComponent(
-          zaloPayData.appTransId || ""
-        )}&token=${encodeURIComponent(zaloPayData.zpTransToken || "")}`
-      );
+      router.push(buildZaloPayGatewayUrl());
       return;
     }
 
@@ -1016,11 +1023,6 @@ function CheckoutContent() {
   // Làm tròn xuống hàng nghìn VNĐ (ví dụ 144.720đ -> 144.000đ)
   const totalAmount = order?.totalAmount ?? (Math.floor((afterDiscount + vat) / 1000) * 1000);
   const loyaltyPoints = Math.floor(totalAmount / 1000);
-
-  const getProductImage = (productId: number) => {
-    const found = DEFAULT_PRODUCTS.find((p) => p.id === productId);
-    return found?.imageUrl || FALLBACK_DRINK_IMG;
-  };
 
   return (
     <div className="min-h-screen bg-[#FAF6F0] text-[#1D1B19] flex flex-col font-body selection:bg-[#FEDCC2] selection:text-[#2C1810]">
@@ -1732,7 +1734,7 @@ function CheckoutContent() {
                           }`}
                         >
                           <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                          {"Ví ZaloPay Sandbox (Bên thứ ba VNG)".normalize("NFC")}
+                          {"ZaloPay E-Wallet (Sandbox VNG)".normalize("NFC")}
                         </button>
                         <button
                           type="button"
@@ -1758,21 +1760,22 @@ function CheckoutContent() {
                                   <div className="w-6 h-6 border-2 border-[#0068FF] border-t-transparent rounded-full animate-spin" />
                                   <span>{"Đang kết nối ZaloPay...".normalize("NFC")}</span>
                                 </div>
-                              ) : (
+                              ) : zaloPayData?.orderUrl ? (
                                 <Image
-                                  src={
-                                    zaloPayData?.orderUrl
-                                      ? `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(
-                                          zaloPayData.orderUrl
-                                        )}`
-                                      : `https://img.vietqr.io/image/MB-0987654321-compact2.png?amount=${order.totalAmount}&addInfo=BREWLITE_${order.id}&accountName=BREWLITE%20ROASTERY`
-                                  }
-                                  alt="Mã QR ZaloPay Sandbox"
+                                  src={`https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(
+                                    zaloPayData.orderUrl
+                                  )}`}
+                                  alt="Mã QR ZaloPay E-Wallet"
                                   fill
                                   unoptimized
                                   sizes="180px"
                                   className="object-contain p-1"
                                 />
+                              ) : (
+                                <div className="flex flex-col items-center gap-2 text-stone-400 text-xs text-center px-3">
+                                  <QrCode size={32} className="text-[#0068FF]/50" />
+                                  <span>{"Phiên ZaloPay E-Wallet chưa sẵn sàng".normalize("NFC")}</span>
+                                </div>
                               )}
                             </div>
                             <span className="text-[10px] text-stone-600 mt-2 font-medium flex items-center gap-1">
@@ -1858,11 +1861,7 @@ function CheckoutContent() {
                                 !zaloPayData?.orderUrl
                               }
                               onClick={() => {
-                                router.push(
-                                  `/gateway/zalopay?orderId=${order.id}&amount=${order.totalAmount}&appTransId=${encodeURIComponent(
-                                    zaloPayData?.appTransId || ""
-                                  )}&token=${encodeURIComponent(zaloPayData?.zpTransToken || "")}`
-                                );
+                                router.push(buildZaloPayGatewayUrl());
                               }}
                               className="w-full py-3 px-4 bg-gradient-to-r from-[#0068FF] to-[#0052CC] hover:from-[#0052CC] hover:to-[#003E99] text-white font-extrabold rounded-xl text-sm flex items-center justify-center gap-2 transition shadow-md hover:shadow-lg cursor-pointer transform hover:-translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
                             >
@@ -2363,28 +2362,30 @@ function CheckoutContent() {
               </div>
 
               {/* 4. Mini Toggle Switch Demo Mode (Tinh tế & Gọn gàng) */}
-              <div className="flex items-center justify-between py-1 px-1 text-xs text-stone-500">
-                <div className="flex items-center gap-1.5">
-                  <span>🧪</span>
-                  <span className="text-stone-600 font-medium">
-                    {"Demo Mode: Giả lập lỗi thanh toán".normalize("NFC")}
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  id="simulateFailureToggle"
-                  role="switch"
-                  aria-checked={simulateFailure}
-                  onClick={() => setSimulateFailure(!simulateFailure)}
-                  className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-hidden ${simulateFailure ? "bg-red-500" : "bg-stone-300"
-                    }`}
-                >
-                  <span
-                    className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${simulateFailure ? "translate-x-4" : "translate-x-0"
+              {demoToolsEnabled && (
+                <div className="flex items-center justify-between py-1 px-1 text-xs text-stone-500">
+                  <div className="flex items-center gap-1.5">
+                    <span>🧪</span>
+                    <span className="text-stone-600 font-medium">
+                      {"Demo Mode: Giả lập lỗi thanh toán".normalize("NFC")}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    id="simulateFailureToggle"
+                    role="switch"
+                    aria-checked={simulateFailure}
+                    onClick={() => setSimulateFailure(!simulateFailure)}
+                    className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-hidden ${simulateFailure ? "bg-red-500" : "bg-stone-300"
                       }`}
-                  />
-                </button>
-              </div>
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${simulateFailure ? "translate-x-4" : "translate-x-0"
+                        }`}
+                    />
+                  </button>
+                </div>
+              )}
 
               {/* 5. Nút Hành động Chính: Pill button màu đen nguyên khối py-3.5 */}
               <div className="flex flex-col gap-2.5">
@@ -2438,7 +2439,7 @@ function CheckoutContent() {
                           ? "bg-stone-400 text-stone-100"
                           : order.status === "PAYMENT_FAILED"
                           ? "bg-amber-600 hover:bg-amber-700 text-white"
-                          : simulateFailure
+                          : effectiveSimulateFailure
                           ? "bg-red-600 hover:bg-red-700 text-white"
                           : "bg-[#1A120B] hover:bg-black text-white"
                       }`}
@@ -2467,10 +2468,12 @@ function CheckoutContent() {
                         <>
                           <Lock size={16} />
                           <span className="font-sans font-bold">
-                            {simulateFailure
+                            {effectiveSimulateFailure
                               ? "Thử nghiệm Lỗi Thanh toán (Demo)".normalize("NFC")
                               : selectedMethod === "EWALLET"
-                              ? `Xác nhận đã chuyển khoản • ${vnd(order.totalAmount)} →`.normalize("NFC")
+                              ? ewalletProvider === "ZALOPAY"
+                                ? `Thanh toán qua ZaloPay E-Wallet • ${vnd(order.totalAmount)} →`.normalize("NFC")
+                                : `Xác nhận đã chuyển khoản VietQR • ${vnd(order.totalAmount)} →`.normalize("NFC")
                               : selectedMethod === "BANK_CARD"
                               ? `Thanh toán qua Thẻ • ${vnd(order.totalAmount)} →`.normalize("NFC")
                               : `Xác thực 1-Chạm • ${vnd(order.totalAmount)} →`.normalize("NFC")}

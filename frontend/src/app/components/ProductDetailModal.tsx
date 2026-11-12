@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { Product, normalizeStitchImageUrl } from "../utils/productUtils";
@@ -29,6 +29,8 @@ export interface CustomizationDetails {
   isBakery?: boolean;
   servingStyle?: string;
 }
+
+type ProductWithStock = Product & { outOfStockSizes?: string[] };
 
 export interface ProductDetailModalProps {
   product: Product | null;
@@ -135,7 +137,7 @@ export default function ProductDetailModal({
   const isBakery = useMemo(() => isBakeryProduct(product), [product]);
   const [selectedSize, setSelectedSize] = useState<"S" | "M" | "L">("M");
   const isCurrentSizeOutOfStock = !isBakery && Boolean(
-    (product as any)?.outOfStockSizes?.includes(selectedSize)
+    (product as ProductWithStock | null)?.outOfStockSizes?.includes(selectedSize)
   );
   const [availableToppings, setAvailableToppings] = useState<ToppingItem[]>(AVAILABLE_TOPPINGS);
   const [availableBakeryToppings, setAvailableBakeryToppings] = useState<ToppingItem[]>(AVAILABLE_BAKERY_TOPPINGS);
@@ -155,11 +157,21 @@ export default function ProductDetailModal({
   const [isFavorite, setIsFavorite] = useState<boolean>(false);
   const [showToast, setShowToast] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string>("");
+  const dismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [globalSizePricing, setGlobalSizePricing] = useState<{ sizeS: number; sizeM: number; sizeL: number }>({
     sizeS: 0,
     sizeM: 5000,
     sizeL: 10000,
   });
+
+  useEffect(() => {
+    return () => {
+      if (dismissTimerRef.current) {
+        clearTimeout(dismissTimerRef.current);
+        dismissTimerRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
@@ -207,7 +219,8 @@ export default function ProductDetailModal({
 
   // Initialize or reset defaults when a new product or initialCustomization is provided
   useEffect(() => {
-    if (product) {
+    if (!product) return;
+    const timer = setTimeout(() => {
       if (initialCustomization) {
         setSelectedSize(initialCustomization.size || "M");
         setTemperature(initialCustomization.temp || "iced");
@@ -226,7 +239,7 @@ export default function ProductDetailModal({
         setQuantity(initialCustomization.quantity || 1);
         setShowToast(false);
       } else {
-        const outSizes: string[] = (product as any)?.outOfStockSizes || [];
+        const outSizes: string[] = (product as ProductWithStock | null)?.outOfStockSizes || [];
         const availableSizes: Array<"S" | "M" | "L"> = (["M", "S", "L"] as const).filter(
           (s) => !outSizes.includes(s)
         );
@@ -258,7 +271,8 @@ export default function ProductDetailModal({
         setQuantity(1);
         setShowToast(false);
       }
-    }
+    }, 0);
+    return () => clearTimeout(timer);
   }, [product, initialCustomization, isOpen, isBakery, currentAvailableToppings]);
 
   // Close modal on Escape key
@@ -405,7 +419,11 @@ export default function ProductDetailModal({
     setShowToast(true);
 
     // Auto dismiss toast after 1.8s and close modal if in modal mode
-    setTimeout(() => {
+    if (dismissTimerRef.current) {
+      clearTimeout(dismissTimerRef.current);
+    }
+    dismissTimerRef.current = setTimeout(() => {
+      dismissTimerRef.current = null;
       setShowToast(false);
       if (isModal) {
         onClose();
@@ -827,7 +845,7 @@ export default function ProductDetailModal({
                       const cfg = sizeConfig[sizeKey];
                       const isSelected = selectedSize === sizeKey;
                       const isSizeOutOfStock = Boolean(
-                        (product as any)?.outOfStockSizes?.includes(sizeKey)
+                        (product as ProductWithStock | null)?.outOfStockSizes?.includes(sizeKey)
                       );
 
                       return (

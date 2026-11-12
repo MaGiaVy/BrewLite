@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
@@ -12,7 +12,6 @@ import {
   Store,
   Clock,
   Tag,
-  CheckCircle2,
   Plus,
   Minus,
   ArrowLeft,
@@ -40,6 +39,15 @@ import {
   writeActivePendingOrder,
   clearActivePendingOrder,
 } from "../store/authStore";
+
+const emptySubscribe = () => () => {};
+
+function generateOrderIdempotencyKey(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `order-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function vnd(n: number) {
@@ -373,8 +381,6 @@ function CartItemCard({
     </article>
   );
 }
-
-const CartItemRow = CartItemCard;
 
 // ─── Sidebar Cards ───────────────────────────────────────────────────────────
 
@@ -926,7 +932,7 @@ export default function CartPage() {
   } = useCartStore();
 
   const { user, refreshProfile } = useAuthStore();
-  const [hydrated, setHydrated] = useState(false);
+  const hydrated = useSyncExternalStore(emptySubscribe, () => true, () => false);
   const [isVoucherModalOpen, setIsVoucherModalOpen] = useState(false);
   const [availableVouchers, setAvailableVouchers] = useState<VoucherItem[]>([
     { code: "BREWCOZY", description: "Giờ vàng -15%", discountPercent: 15, minOrderAmount: 0, maxDiscountAmount: 25000, quantity: 1 },
@@ -947,7 +953,7 @@ export default function CartPage() {
     let isMounted = true;
     apiFetch("/products")
       .then((res) => (res.ok ? res.json() : []))
-      .then((prods: any[]) => {
+      .then((prods: Array<{ id: number; outOfStockSizes?: string[]; availableServings?: number }>) => {
         if (!isMounted || !Array.isArray(prods)) return;
         const map: Record<
           number,
@@ -975,13 +981,8 @@ export default function CartPage() {
   const [editingItem, setEditingItem] = useState<CartItem | null>(null);
 
   useEffect(() => {
-    setHydrated(true);
     refreshProfile?.();
-  }, []);
-
-  const vouchersKey = useMemo(() => {
-    return (user?.vouchers || []).map((v) => `${v.code}:${v.quantity}`).join(",");
-  }, [user?.vouchers]);
+  }, [refreshProfile]);
 
   useEffect(() => {
     const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
@@ -1041,7 +1042,7 @@ export default function CartPage() {
       .catch(() => {
         // Fallback to static vouchers
       });
-  }, [vouchersKey]);
+  }, [user?.vouchers]);
 
   const handleRedeemSuccess = (code: string, newQty?: number) => {
     setAvailableVouchers((prev) => {
@@ -1081,7 +1082,36 @@ export default function CartPage() {
 
   const count = hydrated ? cartCount() : 0;
   const subtotal = hydrated ? cartTotal() : 0;
-  const displayItems = hydrated ? items : [];
+  const displayItems = useMemo(() => (hydrated ? items : []), [hydrated, items]);
+  const orderPayloadSignature = useMemo(
+    () =>
+      JSON.stringify({
+        items: displayItems.map((item) => ({
+          id: item.id,
+          size: item.size ?? "M",
+          sugarLevel: item.sugarLevel ?? "",
+          iceLevel: item.iceLevel ?? "",
+          temperature: item.temperature ?? item.temp ?? "",
+          servingStyle: item.servingStyle ?? "",
+          toppings: [...(item.toppings ?? [])].sort(),
+          notes: item.notes ?? "",
+          quantity: item.quantity,
+          price: item.price,
+        })),
+        discountCode: appliedPromo ?? "",
+      }),
+    [displayItems, appliedPromo]
+  );
+  const orderIdempotencyKeyRef = useRef<{ signature: string; key: string } | null>(null);
+
+  useEffect(() => {
+    if (
+      orderIdempotencyKeyRef.current &&
+      orderIdempotencyKeyRef.current.signature !== orderPayloadSignature
+    ) {
+      orderIdempotencyKeyRef.current = null;
+    }
+  }, [orderPayloadSignature]);
 
   const hasOutOfStockItems = useMemo(() => {
     return displayItems.some((item) => {
@@ -1275,9 +1305,20 @@ export default function CartPage() {
         }
       }
 
+      if (orderIdempotencyKeyRef.current?.signature !== orderPayloadSignature) {
+        orderIdempotencyKeyRef.current = {
+          signature: orderPayloadSignature,
+          key: generateOrderIdempotencyKey(),
+        };
+      }
+      const orderIdempotencyKey = orderIdempotencyKeyRef.current.key;
+
       // apiFetch tự động đính kèm Authorization: Bearer <token>
       const res = await apiFetch("/orders", {
         method: "POST",
+        headers: {
+          "Idempotency-Key": orderIdempotencyKey,
+        },
         body: JSON.stringify(payload),
       });
       if (!res.ok) {

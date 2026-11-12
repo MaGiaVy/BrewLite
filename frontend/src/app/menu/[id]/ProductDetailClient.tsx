@@ -1,7 +1,7 @@
 "use client";
 
 import React, { use, useState, useEffect } from "react";
-import { notFound, useRouter } from "next/navigation";
+import { useRouter } from "next/navigation";
 import Header from "../../components/Header";
 import Footer from "../../components/Footer";
 import ProductDetailModal, {
@@ -122,6 +122,7 @@ export default function ProductDetailClient({
           <ProductDetailModal
             product={product}
             isOpen={true}
+            isModal={false}
             onClose={handleClose}
             onAddToCart={handleAddToCart}
           />

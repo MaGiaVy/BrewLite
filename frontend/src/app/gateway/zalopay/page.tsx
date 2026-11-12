@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { apiFetch, useAuthStore } from "../../store/authStore";
 import { useCartStore } from "../../store/cartStore";
+import { isDemoToolsEnabled } from "@/lib/demo-mode";
 
 function vnd(amount: number): string {
   return new Intl.NumberFormat("vi-VN", {
@@ -108,6 +109,11 @@ function ZaloPayGatewayContent() {
   );
   const appTransId = searchParams.get("appTransId") || fallbackAppTransId;
   const token = searchParams.get("token") || "";
+  const demoToolsEnabled = isDemoToolsEnabled();
+  const [simulateFailure, setSimulateFailure] = useState(
+    () => demoToolsEnabled && searchParams.get("simulateFailure") === "1"
+  );
+  const effectiveSimulateFailure = demoToolsEnabled && simulateFailure;
 
   // State quản lý luồng thanh toán & đồng bộ đơn hàng thực tế
   const [orderInfo, setOrderInfo] = useState<GatewayOrderInfo | null>(null);
@@ -417,6 +423,60 @@ function ZaloPayGatewayContent() {
       setErrorMessage(
         "Đơn hàng đang ở trạng thái Thanh toán thất bại. Vui lòng quay lại Checkout và bấm \"Thử lại thanh toán\" trước."
       );
+      return;
+    }
+
+    if (effectiveSimulateFailure) {
+      setStatus("PROCESSING");
+      setErrorMessage("");
+      try {
+        await new Promise((r) => setTimeout(r, 1000));
+        const cancelRes = await apiFetch("/payments/zalopay/cancel", {
+          method: "POST",
+          body: JSON.stringify({ orderId }),
+        });
+        const cancelData = await cancelRes.json().catch(() => ({}));
+        if (cancelRes.ok) {
+          clearActivePendingOrder(orderId);
+          setOrderInfo((prev) => (prev ? { ...prev, status: "CANCELLED" } : prev));
+          setTimeLeft(0);
+          setStatus("FAILED");
+          setErrorMessage(
+            "Demo Mode: Giao dịch ZaloPay E-Wallet giả lập thất bại. Đơn hàng đã được hủy và hoàn trả nguyên liệu / voucher."
+          );
+        } else {
+          setStatus("FAILED");
+          setErrorMessage(
+            extractGatewayErrorMessage(
+              cancelData,
+              `Demo Mode: Giả lập lỗi thanh toán ZaloPay E-Wallet thất bại (${cancelRes.status}).`
+            )
+          );
+          if (cancelRes.status === 400 || cancelRes.status === 409) {
+            const refreshRes = await apiFetch(`/orders/${orderId}`).catch(() => null);
+            if (refreshRes && refreshRes.ok) {
+              const refreshed: GatewayOrderInfo | null = await refreshRes.json().catch(() => null);
+              if (refreshed) {
+                setOrderInfo(refreshed);
+                if (refreshed.status === "CANCELLED") {
+                  clearActivePendingOrder(orderId);
+                  setTimeLeft(0);
+                } else if (PAID_ORDER_STATUSES.has(refreshed.status)) {
+                  clearActivePendingOrder(orderId);
+                  setStatus("SUCCESS");
+                }
+              }
+            }
+          }
+        }
+      } catch (err: unknown) {
+        setStatus("FAILED");
+        setErrorMessage(
+          err instanceof Error
+            ? err.message
+            : "Demo Mode: Không thể kết nối đến máy chủ khi giả lập lỗi thanh toán ZaloPay."
+        );
+      }
       return;
     }
 
@@ -935,21 +995,50 @@ function ZaloPayGatewayContent() {
 
                 {/* ── CÁC NÚT HÀNH ĐỘNG ── */}
                 <div className="pt-6 space-y-2.5">
+                  {demoToolsEnabled && (
+                    <div className="flex items-center justify-between py-1 px-1 text-xs text-stone-500">
+                      <div className="flex items-center gap-1.5">
+                        <span>🧪</span>
+                        <span className="text-stone-600 font-medium">
+                          Demo Mode: Giả lập lỗi thanh toán ZaloPay
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        id="simulateFailureToggle"
+                        role="switch"
+                        aria-checked={simulateFailure}
+                        onClick={() => setSimulateFailure(!simulateFailure)}
+                        className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-hidden ${
+                          simulateFailure ? "bg-red-500" : "bg-stone-300"
+                        }`}
+                      >
+                        <span
+                          className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
+                            simulateFailure ? "translate-x-4" : "translate-x-0"
+                          }`}
+                        />
+                      </button>
+                    </div>
+                  )}
+
                   {/* NÚT CHÍNH: THANH TOÁN BẰNG VÍ ZALOPAY */}
                   <button
                     type="button"
                     disabled={
                       status === "PROCESSING" ||
                       isCancelling ||
-                      isInsufficient ||
+                      (!effectiveSimulateFailure && isInsufficient) ||
                       isExpiredOrCancelled ||
                       isPaymentFailed ||
                       !orderId
                     }
                     onClick={handleConfirmPayment}
                     className={`w-full py-4 px-6 font-extrabold rounded-2xl text-base flex items-center justify-center gap-2.5 transition shadow-lg cursor-pointer transform active:scale-[0.99] disabled:opacity-60 disabled:cursor-not-allowed ${
-                      isInsufficient || isExpiredOrCancelled || isPaymentFailed || !orderId
+                      (!effectiveSimulateFailure && isInsufficient) || isExpiredOrCancelled || isPaymentFailed || !orderId
                         ? "bg-stone-300 text-stone-600 shadow-none"
+                        : effectiveSimulateFailure
+                        ? "bg-red-600 hover:bg-red-700 text-white shadow-red-500/25"
                         : "bg-gradient-to-r from-[#0068FF] to-[#0050C8] hover:from-[#0050C8] hover:to-[#003B94] text-white shadow-blue-500/30"
                     }`}
                   >
@@ -968,10 +1057,15 @@ function ZaloPayGatewayContent() {
                         <AlertCircle size={18} className="text-stone-600" />
                         <span>Vui lòng thử lại từ Checkout</span>
                       </>
-                    ) : isInsufficient ? (
+                    ) : !effectiveSimulateFailure && isInsufficient ? (
                       <>
                         <AlertCircle size={18} className="text-rose-600" />
                         <span>Số dư không đủ — Vui lòng nạp thêm tiền</span>
+                      </>
+                    ) : effectiveSimulateFailure ? (
+                      <>
+                        <AlertCircle size={18} />
+                        <span>Thử nghiệm Lỗi Thanh toán ZaloPay (Demo)</span>
                       </>
                     ) : (
                       <>
