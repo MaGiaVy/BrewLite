@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useSyncExternalStore } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
@@ -9,6 +9,9 @@ import Footer from "../components/Footer";
 import { useAuthStore } from "../store/authStore";
 import { useCartStore } from "../store/cartStore";
 import type { AuthUser } from "../store/authStore";
+import { isDemoToolsEnabled } from "../../lib/demo-mode";
+
+const emptySubscribe = () => () => {};
 
 type AuthMode = "login" | "register";
 
@@ -232,11 +235,12 @@ export default function LoginClient({
 
   const { user, setAuth, isAuthenticated, _hasHydrated } = useAuthStore();
   const { cartCount } = useCartStore();
-  const [mounted, setMounted] = useState(false);
+  const mounted = useSyncExternalStore(emptySubscribe, () => true, () => false);
+  const demoToolsEnabled = isDemoToolsEnabled();
 
-  useEffect(() => {
-    setMounted(true);
-  }, []);
+
+
+
 
   const count = mounted ? cartCount() : 0;
 
@@ -421,7 +425,7 @@ export default function LoginClient({
                 </div>
 
                 {/* Quick Role Demo Switcher (Sprint 4 RBAC & Team Members) */}
-                {mode === "login" && (
+                {demoToolsEnabled && mode === "login" && (
                   <div className="p-3.5 rounded-2xl bg-[#f8f2ee] border border-[#2c1810]/10 flex flex-col gap-2.5">
                     <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-[#845326]">
                       <span className="flex items-center gap-1">

@@ -6,6 +6,31 @@
 
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
+import { SESSION_ROLE_COOKIE } from "../../lib/route-guard";
+
+function syncSessionRoleCookie(role?: UserRole | string | null): void {
+  if (typeof document === "undefined") return;
+  if (role === "CUSTOMER" || role === "STAFF" || role === "ADMIN") {
+    document.cookie = `${SESSION_ROLE_COOKIE}=${role}; Path=/; SameSite=Lax; Max-Age=86400`;
+    return;
+  }
+  document.cookie = `${SESSION_ROLE_COOKIE}=; Path=/; SameSite=Lax; Max-Age=0`;
+}
+
+function clearSessionRoleCookie(): void {
+  if (typeof document === "undefined") return;
+  document.cookie = `${SESSION_ROLE_COOKIE}=; Path=/; SameSite=Lax; Max-Age=0`;
+}
+
+function syncCookieFromAuthState(
+  state?: { isAuthenticated?: boolean; token?: string | null; user?: AuthUser | null } | null
+): void {
+  if (state?.isAuthenticated && state.token && state.user) {
+    syncSessionRoleCookie(state.user.role ?? "CUSTOMER");
+    return;
+  }
+  clearSessionRoleCookie();
+}
 
 export type UserRole = "CUSTOMER" | "STAFF" | "ADMIN";
 
@@ -146,24 +171,48 @@ export const useAuthStore = create<AuthState>()(
       _hasHydrated: false,
 
       setAuth: (user, token) =>
-        set({ user, token, isAuthenticated: true }),
+        {
+          syncSessionRoleCookie(user?.role ?? "CUSTOMER");
+          set({ user, token, isAuthenticated: true });
+        },
 
       logout: () => {
+        clearSessionRoleCookie();
         clearActivePendingOrder();
         set({ user: null, token: null, isAuthenticated: false });
       },
 
-      setHasHydrated: (state) => set({ _hasHydrated: state }),
+      setHasHydrated: (state) => {
+        set({ _hasHydrated: state });
+        if (state) {
+          syncCookieFromAuthState(get());
+        }
+      },
 
       refreshProfile: async () => {
         const token = get().token;
-        if (!token) return;
+        if (!token) {
+          clearSessionRoleCookie();
+          return;
+        }
         try {
           const res = await apiFetch("/auth/me");
+          if (!res.ok) {
+            if (res.status === 401 || res.status === 403) {
+              get().logout();
+            } else {
+              clearSessionRoleCookie();
+            }
+            return;
+          }
           if (res.ok) {
             const data = await res.json();
             set((state) => ({
-              user: state.user ? { ...state.user, ...data } : data,
+              user: (() => {
+                const nextUser = state.user ? { ...state.user, ...data } : data;
+                syncSessionRoleCookie(nextUser?.role ?? "CUSTOMER");
+                return nextUser;
+              })(),
             }));
           }
         } catch {
@@ -249,6 +298,7 @@ export const useAuthStore = create<AuthState>()(
       ),
       onRehydrateStorage: () => (state) => {
         state?.setHasHydrated(true);
+        syncCookieFromAuthState(state);
       },
     }
   )
@@ -279,7 +329,12 @@ export async function apiFetch(
       const currentPath = `${window.location.pathname}${window.location.search || ""}`;
       if (!window.location.pathname.startsWith("/login")) {
         try {
-          window.location.href = `/login?redirect=${encodeURIComponent(currentPath || "/checkout")}`;
+          window.location.assign(
+            new URL(
+              `/login?redirect=${encodeURIComponent(currentPath || "/checkout")}`,
+              window.location.origin
+            ).toString()
+          );
         } catch {
           // ignore in test environment
         }
