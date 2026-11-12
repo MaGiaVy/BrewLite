@@ -1,9 +1,8 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 import { Tag } from "lucide-react";
 import { useAuthStore } from "../store/authStore";
 import { useCartStore } from "../store/cartStore";
@@ -18,11 +17,15 @@ interface LoyaltyDrawerProps {
 
 export default function LoyaltyDrawer({ isOpen, onClose }: LoyaltyDrawerProps) {
   const router = useRouter();
-  const { user, logout, refreshProfile, isAuthenticated } = useAuthStore();
+  const { user, logout, refreshProfile } = useAuthStore();
   const { setAppliedPromo, appliedPromo, cartTotal } = useCartStore();
 
   const [redeemedToast, setRedeemedToast] = useState<string | null>(null);
-  const [mounted, setMounted] = useState(false);
+  const mounted = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false
+  );
   const [isVoucherModalOpen, setIsVoucherModalOpen] = useState(false);
   const [isEditProfileOpen, setIsEditProfileOpen] = useState(false);
   const [isRefreshingPoints, setIsRefreshingPoints] = useState(false);
@@ -33,13 +36,7 @@ export default function LoyaltyDrawer({ isOpen, onClose }: LoyaltyDrawerProps) {
     { code: "BREW50", description: "Siêu Voucher Giảm 50% VIP", discountPercent: 50, minOrderAmount: 120000, maxDiscountAmount: 60000, quantity: 1 },
   ]);
 
-  useEffect(() => {
-    setMounted(true);
-  }, []);
-
-  const vouchersKey = useMemo(() => {
-    return (user?.vouchers || []).map((v) => `${v.code}:${v.quantity}`).join(",");
-  }, [user?.vouchers]);
+  const userVouchers = useMemo(() => user?.vouchers || [], [user?.vouchers]);
 
   useEffect(() => {
     const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
@@ -56,7 +53,6 @@ export default function LoyaltyDrawer({ isOpen, onClose }: LoyaltyDrawerProps) {
           baseList = data.vouchers.map((v: VoucherItem) => ({ ...v, quantity: v.quantity || 1 }));
         }
 
-        const userVouchers = user?.vouchers || [];
         const merged = [...baseList];
         userVouchers.forEach((uv) => {
           const idx = merged.findIndex((m) => m.code === uv.code);
@@ -78,7 +74,7 @@ export default function LoyaltyDrawer({ isOpen, onClose }: LoyaltyDrawerProps) {
         setVouchers(merged);
       })
       .catch(() => {});
-  }, [vouchersKey]);
+  }, [userVouchers]);
 
   useEffect(() => {
     if (isOpen) {

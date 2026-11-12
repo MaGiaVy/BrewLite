@@ -2,7 +2,7 @@
 
 import React, { useMemo, useState } from "react";
 
-interface OrderItemDetail {
+export interface OrderItemDetail {
   id: number;
   productId: number;
   productName: string;
@@ -12,7 +12,7 @@ interface OrderItemDetail {
   unitPrice: number;
 }
 
-interface OrderSummary {
+export interface OrderSummary {
   id: number;
   status: string;
   totalAmount: number;
@@ -25,7 +25,7 @@ interface OrderSummary {
   items?: OrderItemDetail[];
 }
 
-interface ProductItem {
+export interface ProductItem {
   id: number;
   name: string;
   category?: string;
@@ -34,7 +34,185 @@ interface ProductItem {
 
 interface Props {
   allOrders: OrderSummary[];
-  products: any[];
+  products: ProductItem[];
+}
+
+export interface DayRevenueBucket {
+  dateStr: string;
+  dayOfWeek: string;
+  displayDate: string;
+  isToday: boolean;
+  revenue: number;
+  orderCount: number;
+  orders: OrderSummary[];
+}
+
+export interface CategoryStatItem {
+  key: string;
+  name: string;
+  revenue: number;
+  quantity: number;
+  percent: number;
+}
+
+export interface RevenueDashboardMetrics {
+  last7DaysData: DayRevenueBucket[];
+  categoryStats: {
+    list: CategoryStatItem[];
+    totalCatRevenue: number;
+  };
+  total7DaysRevenue: number;
+  total7DaysOrders: number;
+  averageOrderValue: number;
+}
+
+const COUNTABLE_ORDER_STATUSES = new Set([
+  "PAID",
+  "PREPARING",
+  "READY",
+  "COMPLETED",
+]);
+
+function toLocalDateStr(d: Date): string {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function allocateAmountProportionally(
+  totalAmount: number,
+  weights: number[]
+): number[] {
+  if (weights.length === 0) return [];
+  const target = Math.round(totalAmount);
+  const weightSum = weights.reduce((acc, w) => acc + w, 0);
+
+  if (weightSum <= 0) {
+    // Guard divide-by-zero / NaN when all item weights are 0
+    return weights.map((_, idx) => (idx === 0 && target > 0 ? target : 0));
+  }
+
+  const shares = weights.map((w) => (target * w) / weightSum);
+  const floors = shares.map((s) => Math.floor(s));
+  const floorSum = floors.reduce((acc, v) => acc + v, 0);
+  const remainder = target - floorSum;
+
+  if (remainder > 0) {
+    const orderByRemainder = shares
+      .map((s, idx) => ({ idx, frac: s - floors[idx] }))
+      .sort((a, b) => b.frac - a.frac || a.idx - b.idx);
+    for (let i = 0; i < remainder; i++) {
+      floors[orderByRemainder[i % orderByRemainder.length].idx] += 1;
+    }
+  }
+
+  return floors;
+}
+
+export function computeRevenueDashboardMetrics(
+  allOrders: OrderSummary[],
+  products: ProductItem[],
+  now: Date = new Date()
+): RevenueDashboardMetrics {
+  const days: DayRevenueBucket[] = [];
+  const dayNames = ["CN", "T2", "T3", "T4", "T5", "T6", "T7"];
+
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(now);
+    d.setDate(now.getDate() - i);
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    days.push({
+      dateStr: toLocalDateStr(d),
+      dayOfWeek: dayNames[d.getDay()],
+      displayDate: `${day}/${month}`,
+      isToday: i === 0,
+      revenue: 0,
+      orderCount: 0,
+      orders: [],
+    });
+  }
+
+  const dayMap = new Map(days.map((d) => [d.dateStr, d]));
+  const productCategoryMap = new Map<number, string>();
+  products.forEach((p) => {
+    if (p?.id) {
+      productCategoryMap.set(p.id, p.category || "vietnamese");
+    }
+  });
+
+  const stats: Record<string, { name: string; revenue: number; quantity: number }> = {
+    vietnamese: { name: CATEGORY_NAMES.vietnamese, revenue: 0, quantity: 0 },
+    espresso: { name: CATEGORY_NAMES.espresso, revenue: 0, quantity: 0 },
+    tea: { name: CATEGORY_NAMES.tea, revenue: 0, quantity: 0 },
+    coldbrew: { name: CATEGORY_NAMES.coldbrew, revenue: 0, quantity: 0 },
+    bakery: { name: CATEGORY_NAMES.bakery, revenue: 0, quantity: 0 },
+  };
+
+  let totalCatRevenue = 0;
+
+  allOrders.forEach((order) => {
+    if (!COUNTABLE_ORDER_STATUSES.has(order.status)) return;
+
+    const orderDate = new Date(order.createdAt);
+    if (Number.isNaN(orderDate.getTime())) return;
+
+    const targetDay = dayMap.get(toLocalDateStr(orderDate));
+    if (!targetDay) return;
+
+    const orderNetRevenue = Math.round(Number(order.totalAmount) || 0);
+    targetDay.revenue += orderNetRevenue;
+    targetDay.orderCount += 1;
+    targetDay.orders.push(order);
+
+    const items = Array.isArray(order.items) ? order.items : [];
+    if (items.length === 0) return;
+
+    const weights = items.map((item) =>
+      Math.max(0, (Number(item.unitPrice) || 0) * (Number(item.quantity) || 0))
+    );
+    const allocated = allocateAmountProportionally(orderNetRevenue, weights);
+
+    items.forEach((item, idx) => {
+      const cat = productCategoryMap.get(item.productId) || "vietnamese";
+      if (!stats[cat]) {
+        stats[cat] = {
+          name: CATEGORY_NAMES[cat] || "Khác",
+          revenue: 0,
+          quantity: 0,
+        };
+      }
+      stats[cat].revenue += allocated[idx] ?? 0;
+      stats[cat].quantity += Number(item.quantity) || 0;
+      totalCatRevenue += allocated[idx] ?? 0;
+    });
+  });
+
+  const total7DaysRevenue = days.reduce((acc, d) => acc + d.revenue, 0);
+  const total7DaysOrders = days.reduce((acc, d) => acc + d.orderCount, 0);
+  const averageOrderValue =
+    total7DaysOrders > 0 ? Math.round(total7DaysRevenue / total7DaysOrders) : 0;
+
+  return {
+    last7DaysData: days,
+    categoryStats: {
+      list: Object.entries(stats)
+        .map(([key, data]) => ({
+          key,
+          ...data,
+          percent:
+            totalCatRevenue > 0
+              ? Math.round((data.revenue / totalCatRevenue) * 100)
+              : 0,
+        }))
+        .sort((a, b) => b.revenue - a.revenue),
+      totalCatRevenue,
+    },
+    total7DaysRevenue,
+    total7DaysOrders,
+    averageOrderValue,
+  };
 }
 
 const CATEGORY_NAMES: Record<string, string> = {
@@ -56,140 +234,22 @@ const CATEGORY_COLORS: Record<string, { bg: string; text: string; bar: string }>
 export default function RevenueChartSection({ allOrders, products }: Props) {
   const [hoveredDayIndex, setHoveredDayIndex] = useState<number | null>(null);
 
-  // 1. Thống kê 7 ngày gần nhất (tính từ hôm nay lùi về 6 ngày trước)
-  const last7DaysData = useMemo(() => {
-    const days: {
-      dateStr: string; // YYYY-MM-DD
-      dayOfWeek: string;
-      displayDate: string; // DD/MM
-      isToday: boolean;
-      revenue: number;
-      orderCount: number;
-      orders: OrderSummary[];
-    }[] = [];
-
-    const now = new Date();
-    // Tạo mốc 7 ngày
-    for (let i = 6; i >= 0; i--) {
-      const d = new Date(now);
-      d.setDate(now.getDate() - i);
-      const year = d.getFullYear();
-      const month = String(d.getMonth() + 1).padStart(2, "0");
-      const day = String(d.getDate()).padStart(2, "0");
-      const dateStr = `${year}-${month}-${day}`;
-
-      const dayNames = ["CN", "T2", "T3", "T4", "T5", "T6", "T7"];
-      const dayOfWeek = dayNames[d.getDay()];
-      const isToday = i === 0;
-
-      days.push({
-        dateStr,
-        dayOfWeek,
-        displayDate: `${day}/${month}`,
-        isToday,
-        revenue: 0,
-        orderCount: 0,
-        orders: [],
-      });
-    }
-
-    // Lọc và gộp đơn hàng
-    allOrders.forEach((order: OrderSummary) => {
-      const isCountable =
-        order.status === "PAID" ||
-        order.status === "PREPARING" ||
-        order.status === "READY" ||
-        order.status === "COMPLETED";
-
-      if (!isCountable) return;
-
-      const orderDate = new Date(order.createdAt);
-      const oYear = orderDate.getFullYear();
-      const oMonth = String(orderDate.getMonth() + 1).padStart(2, "0");
-      const oDay = String(orderDate.getDate()).padStart(2, "0");
-      const oDateStr = `${oYear}-${oMonth}-${oDay}`;
-
-      const targetDay = days.find((d) => d.dateStr === oDateStr);
-      if (targetDay) {
-        targetDay.revenue += order.totalAmount;
-        targetDay.orderCount += 1;
-        targetDay.orders.push(order);
-      }
-    });
-
-    return days;
-  }, [allOrders]);
+  const {
+    last7DaysData,
+    categoryStats,
+    total7DaysRevenue,
+    total7DaysOrders,
+    averageOrderValue,
+  } = useMemo(
+    () => computeRevenueDashboardMetrics(allOrders, products),
+    [allOrders, products]
+  );
 
   // Max revenue để chia tỷ lệ biểu đồ
   const maxRevenue = useMemo(() => {
     const maxVal = Math.max(...last7DaysData.map((d) => d.revenue), 0);
     return maxVal > 0 ? maxVal * 1.15 : 100000; // Thêm 15% padding phía trên
   }, [last7DaysData]);
-
-  // 2. Thống kê phân bổ theo danh mục sản phẩm
-  const categoryStats = useMemo(() => {
-    const productCategoryMap = new Map<number, string>();
-    products.forEach((p) => {
-      if (p?.id) {
-        productCategoryMap.set(p.id, p.category || "vietnamese");
-      }
-    });
-
-    const stats: Record<string, { name: string; revenue: number; quantity: number }> = {
-      vietnamese: { name: CATEGORY_NAMES.vietnamese, revenue: 0, quantity: 0 },
-      espresso: { name: CATEGORY_NAMES.espresso, revenue: 0, quantity: 0 },
-      tea: { name: CATEGORY_NAMES.tea, revenue: 0, quantity: 0 },
-      coldbrew: { name: CATEGORY_NAMES.coldbrew, revenue: 0, quantity: 0 },
-      bakery: { name: CATEGORY_NAMES.bakery, revenue: 0, quantity: 0 },
-    };
-
-    let totalCatRevenue = 0;
-
-    allOrders.forEach((order: OrderSummary) => {
-      const isCountable =
-        order.status === "PAID" ||
-        order.status === "PREPARING" ||
-        order.status === "READY" ||
-        order.status === "COMPLETED";
-
-      if (!isCountable || !order.items) return;
-
-      order.items.forEach((item: OrderItemDetail) => {
-        const cat = productCategoryMap.get(item.productId) || "vietnamese";
-        if (!stats[cat]) {
-          stats[cat] = {
-            name: CATEGORY_NAMES[cat] || "Khác",
-            revenue: 0,
-            quantity: 0,
-          };
-        }
-        const itemTotal = item.unitPrice * item.quantity;
-        stats[cat].revenue += itemTotal;
-        stats[cat].quantity += item.quantity;
-        totalCatRevenue += itemTotal;
-      });
-    });
-
-    return {
-      list: Object.entries(stats)
-        .map(([key, data]) => ({
-          key,
-          ...data,
-          percent:
-            totalCatRevenue > 0
-              ? Math.round((data.revenue / totalCatRevenue) * 100)
-              : 0,
-        }))
-        .sort((a, b) => b.revenue - a.revenue),
-      totalCatRevenue,
-    };
-  }, [allOrders, products]);
-
-  // 3. Các chỉ số KPI 7 ngày
-  const total7DaysRevenue = last7DaysData.reduce((acc, d) => acc + d.revenue, 0);
-  const total7DaysOrders = last7DaysData.reduce((acc, d) => acc + d.orderCount, 0);
-  const averageOrderValue =
-    total7DaysOrders > 0 ? Math.round(total7DaysRevenue / total7DaysOrders) : 0;
 
   // Tọa độ SVG cho biểu đồ cột
   const chartWidth = 680;

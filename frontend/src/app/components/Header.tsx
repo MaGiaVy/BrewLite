@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useSyncExternalStore } from "react";
 import Link from "next/link";
 import BrewLiteLogo from "./BrewLiteLogo";
 import { apiFetch, useAuthStore } from "../store/authStore";
@@ -30,17 +30,20 @@ export default function Header({
   badgeAnimated = false,
 }: HeaderProps) {
   const [localSearch, setLocalSearch] = useState(searchQuery);
-  const [isMounted, setIsMounted] = useState(false);
+  const isMounted = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false
+  );
   const [isLoyaltyDrawerOpen, setIsLoyaltyDrawerOpen] = useState(false);
   const [isNotifOpen, setIsNotifOpen] = useState(false);
   const [liveOrders, setLiveOrders] = useState<HeaderOrderSummary[]>([]);
   const prevReadyIdsRef = useRef<Set<number>>(new Set());
 
-  const { user, isAuthenticated, logout, _hasHydrated, refreshProfile } =
+  const { user, isAuthenticated, _hasHydrated, refreshProfile } =
     useAuthStore();
 
   useEffect(() => {
-    setIsMounted(true);
     if (isAuthenticated) {
       refreshProfile();
     }

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo, useSyncExternalStore } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { Flame, Snowflake, Wheat } from "lucide-react";
@@ -14,7 +14,6 @@ import { useCartStore, isBakeryProduct } from "../store/cartStore";
 export type { Product, ProductRecipeItem } from "../utils/productUtils";
 import {
   type Product,
-  type ProductRecipeItem,
   DEFAULT_PRODUCTS,
   normalizeStitchImageUrl,
   getProductMetadata,
@@ -123,10 +122,11 @@ export default function MenuPage() {
     });
   }, [products, selectedCategory, searchQuery, tempFilter]);
 
-  const [hydrated, setHydrated] = useState(false);
-  useEffect(() => {
-    setHydrated(true);
-  }, []);
+  const hydrated = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false
+  );
 
   // Cart count & total derived from Zustand store (hydrated on client)
   const count = hydrated ? cartCount() : 0;

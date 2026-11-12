@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import {
   User,
@@ -32,9 +32,13 @@ export default function EditProfileModal({
 }: EditProfileModalProps) {
   const { user, refreshProfile } = useAuthStore();
 
-  const [mounted, setMounted] = useState(false);
-  const [fullName, setFullName] = useState("");
-  const [phone, setPhone] = useState("");
+  const mounted = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false
+  );
+  const [fullName, setFullName] = useState(user?.fullName || "");
+  const [phone, setPhone] = useState(user?.phone || "");
 
   // Change password toggle & fields
   const [isChangingPassword, setIsChangingPassword] = useState(false);
@@ -52,12 +56,10 @@ export default function EditProfileModal({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  useEffect(() => {
-    setMounted(true);
-  }, []);
-
-  // Sync state whenever modal opens or user updates
-  useEffect(() => {
+  // Reset form fields when modal transitions from closed to open
+  const [prevIsOpen, setPrevIsOpen] = useState(isOpen);
+  if (isOpen !== prevIsOpen) {
+    setPrevIsOpen(isOpen);
     if (isOpen) {
       setFullName(user?.fullName || "");
       setPhone(user?.phone || "");
@@ -71,7 +73,7 @@ export default function EditProfileModal({
       setErrorMessage(null);
       setSuccessMessage(null);
     }
-  }, [isOpen, user]);
+  }
 
   if (!isOpen || !mounted) return null;
 

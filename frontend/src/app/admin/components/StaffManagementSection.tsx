@@ -117,7 +117,14 @@ export default function StaffManagementSection({
     try {
       if (editingStaff) {
         // Cập nhật
-        const payload: any = {
+        const payload: {
+          fullName: string;
+          email: string;
+          phone: string | null;
+          role: "STAFF" | "ADMIN";
+          isActive: boolean;
+          password?: string;
+        } = {
           fullName: fullName.trim(),
           email: email.trim(),
           phone: phone.trim() || null,
@@ -164,8 +171,8 @@ export default function StaffManagementSection({
 
       setIsModalOpen(false);
       await onRefresh();
-    } catch (err: any) {
-      showToast(`❌ ${err.message || "Lỗi thao tác nhân viên"}`);
+    } catch (err: unknown) {
+      showToast(`❌ ${err instanceof Error ? err.message : "Lỗi thao tác nhân viên"}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -196,8 +203,8 @@ export default function StaffManagementSection({
           : `🔒 Đã tạm khóa tài khoản: ${staff.fullName}`
       );
       await onRefresh();
-    } catch (err: any) {
-      showToast(`❌ ${err.message || "Lỗi đổi trạng thái"}`);
+    } catch (err: unknown) {
+      showToast(`❌ ${err instanceof Error ? err.message : "Lỗi đổi trạng thái"}`);
     }
   };
 
@@ -225,8 +232,8 @@ export default function StaffManagementSection({
       showToast(resData.message || `Đã xóa nhân viên ${deletingStaff.fullName}`);
       setDeletingStaff(null);
       await onRefresh();
-    } catch (err: any) {
-      showToast(`❌ ${err.message || "Lỗi khi xóa nhân viên"}`);
+    } catch (err: unknown) {
+      showToast(`❌ ${err instanceof Error ? err.message : "Lỗi khi xóa nhân viên"}`);
     } finally {
       setIsDeleting(false);
     }
@@ -579,7 +586,7 @@ export default function StaffManagementSection({
                   </label>
                   <select
                     value={role}
-                    onChange={(e) => setRole(e.target.value as any)}
+                    onChange={(e) => setRole(e.target.value as "STAFF" | "ADMIN")}
                     className="w-full px-3.5 py-2.5 rounded-xl border border-[#E6DDD5] text-xs text-[#2C1E18] focus:outline-none focus:border-[#9E5A2B]"
                   >
                     <option value="STAFF">Nhân Viên (STAFF) — Pha chế, KDS</option>

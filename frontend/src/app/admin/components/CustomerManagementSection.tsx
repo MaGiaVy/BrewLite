@@ -17,7 +17,7 @@ export interface CustomerUser {
 
 interface Props {
   customers?: CustomerUser[];
-  staffList?: any[];
+  staffList?: unknown[];
   currentUserId?: number;
   onRefresh?: () => Promise<void> | void;
   showToast: (msg: string) => void;
@@ -33,6 +33,13 @@ export default function CustomerManagementSection({
   const [customerList, setCustomerList] = useState<CustomerUser[]>(
     initialCustomers || []
   );
+  const [prevInitialCustomers, setPrevInitialCustomers] = useState(initialCustomers);
+  if (initialCustomers !== prevInitialCustomers) {
+    setPrevInitialCustomers(initialCustomers);
+    if (initialCustomers && initialCustomers.length > 0) {
+      setCustomerList(initialCustomers);
+    }
+  }
   const [isLoading, setIsLoading] = useState<boolean>(false);
 
   // Search & Filter State
@@ -81,15 +88,14 @@ export default function CustomerManagementSection({
   }, [apiFetch, showToast]);
 
   useEffect(() => {
-    fetchCustomers();
+    let active = true;
+    Promise.resolve().then(() => {
+      if (active) void fetchCustomers();
+    });
+    return () => {
+      active = false;
+    };
   }, [fetchCustomers]);
-
-  // Đồng bộ khi prop customers thay đổi
-  useEffect(() => {
-    if (initialCustomers && initialCustomers.length > 0) {
-      setCustomerList(initialCustomers);
-    }
-  }, [initialCustomers]);
 
   // Handle global refresh
   const handleReload = async () => {
@@ -175,8 +181,8 @@ export default function CustomerManagementSection({
           : `🔒 Đã tạm khóa tài khoản: ${customer.fullName}`
       );
       await handleReload();
-    } catch (err: any) {
-      showToast(`❌ ${err.message || "Lỗi cập nhật trạng thái"}`);
+    } catch (err: unknown) {
+      showToast(`❌ ${err instanceof Error ? err.message : "Lỗi cập nhật trạng thái"}`);
     }
   };
 
@@ -230,8 +236,8 @@ export default function CustomerManagementSection({
       showToast(`✅ Đã tạo thành công khách hàng: ${createFullName.trim()}`);
       setIsCreateModalOpen(false);
       await handleReload();
-    } catch (err: any) {
-      showToast(`❌ ${err.message || "Lỗi tạo khách hàng"}`);
+    } catch (err: unknown) {
+      showToast(`❌ ${err instanceof Error ? err.message : "Lỗi tạo khách hàng"}`);
     } finally {
       setIsSubmittingCreate(false);
     }
@@ -293,8 +299,8 @@ export default function CustomerManagementSection({
       showToast(`✅ Đã cập nhật khách hàng: ${editFullName.trim()}`);
       setIsEditModalOpen(false);
       await handleReload();
-    } catch (err: any) {
-      showToast(`❌ ${err.message || "Lỗi cập nhật khách hàng"}`);
+    } catch (err: unknown) {
+      showToast(`❌ ${err instanceof Error ? err.message : "Lỗi cập nhật khách hàng"}`);
     } finally {
       setIsSubmittingEdit(false);
     }
@@ -320,8 +326,8 @@ export default function CustomerManagementSection({
       );
       setDeletingCustomer(null);
       await handleReload();
-    } catch (err: any) {
-      showToast(`❌ ${err.message || "Lỗi xóa khách hàng"}`);
+    } catch (err: unknown) {
+      showToast(`❌ ${err instanceof Error ? err.message : "Lỗi xóa khách hàng"}`);
     } finally {
       setIsDeleting(false);
     }
@@ -484,7 +490,9 @@ export default function CustomerManagementSection({
             </label>
             <select
               value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as any)}
+              onChange={(e) =>
+                setStatusFilter(e.target.value as "ALL" | "ACTIVE" | "INACTIVE")
+              }
               className="w-full px-3 py-2 rounded-xl bg-[#FAF6F0] border border-[#E6DDD5] text-xs text-[#2C1E18] focus:outline-none focus:border-[#9E5A2B] font-semibold"
             >
               <option value="ALL">Tất cả ({customerList.length})</option>
@@ -500,7 +508,11 @@ export default function CustomerManagementSection({
             </label>
             <select
               value={sortBy}
-              onChange={(e) => setSortBy(e.target.value as any)}
+              onChange={(e) =>
+                setSortBy(
+                  e.target.value as "NEWEST" | "POINTS" | "ORDERS" | "NAME"
+                )
+              }
               className="w-full px-3 py-2 rounded-xl bg-[#FAF6F0] border border-[#E6DDD5] text-xs text-[#2C1E18] focus:outline-none focus:border-[#9E5A2B] font-semibold"
             >
               <option value="NEWEST">Mới nhất (ID ↓)</option>

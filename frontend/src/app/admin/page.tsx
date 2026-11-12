@@ -79,7 +79,10 @@ interface ToppingRecipeEntry {
 interface InventoryLogEntry {
   id: number;
   ingredientId: number;
-  action: string;
+  ingredientName?: string;
+  unit?: string;
+  type?: string;
+  action?: string;
   changeAmount: number;
   previousStock: number;
   newStock: number;
@@ -221,6 +224,7 @@ export default function AdminPortalPage() {
     []
   );
   const [allOrders, setAllOrders] = useState<OrderSummary[]>([]);
+  const [chartOrders, setChartOrders] = useState<OrderSummary[]>([]);
   const [staffList, setStaffList] = useState<StaffUser[]>([]);
   const [customerList, setCustomerList] = useState<CustomerUser[]>([]);
   const [topSellingProducts, setTopSellingProducts] = useState<
@@ -479,8 +483,10 @@ export default function AdminPortalPage() {
             sizeL: String(dashData.sizePricing.sizeL ?? 10000),
           });
         }
-        setAllOrders(
-          Array.isArray(dashData?.recentOrders) ? dashData.recentOrders : []
+        const recent = Array.isArray(dashData?.recentOrders) ? dashData.recentOrders : [];
+        setAllOrders(recent);
+        setChartOrders(
+          Array.isArray(dashData?.chartOrders) ? dashData.chartOrders : recent
         );
         setTopSellingProducts(
           Array.isArray(dashData?.topSellingProducts)
@@ -532,7 +538,13 @@ export default function AdminPortalPage() {
   );
 
   useEffect(() => {
-    fetchAdminData();
+    let active = true;
+    Promise.resolve().then(() => {
+      if (active) void fetchAdminData();
+    });
+    return () => {
+      active = false;
+    };
   }, [fetchAdminData]);
 
   // ─── PRODUCT HANDLERS ──────────────────────────────────────────────────────
@@ -839,9 +851,10 @@ export default function AdminPortalPage() {
     setIsSubmittingModal(true);
     try {
       const isBulk = selectedIngredient.unit === "g" || selectedIngredient.unit === "ml";
-      const rawCost = Number(restockCostInput);
+      const trimmedCost = restockCostInput.trim();
+      const rawCost = trimmedCost === "" ? NaN : Number(trimmedCost);
       const computedUnitCost =
-        !isNaN(rawCost) && rawCost >= 0
+        trimmedCost !== "" && Number.isFinite(rawCost) && rawCost >= 0
           ? restockCostMode === "bulk" && isBulk
             ? rawCost / 1000
             : rawCost
@@ -975,13 +988,19 @@ export default function AdminPortalPage() {
 
     setIsSavingIng(true);
     try {
+      const trimmedIngCost = ingCostPerUnit.trim();
+      const parsedIngCost = Number(trimmedIngCost);
       const payload = {
         code: ingCode.trim().toUpperCase(),
         name: ingName.trim(),
         unit: ingUnit.trim(),
         stock: stockNum,
         minThreshold: minNum,
-        costPerUnit: Math.max(0, Number(ingCostPerUnit) || 0),
+        ...(trimmedIngCost !== "" && Number.isFinite(parsedIngCost)
+          ? { costPerUnit: Math.max(0, parsedIngCost) }
+          : editingIng
+          ? {}
+          : { costPerUnit: 0 }),
         type: ingType,
         isRequiredForSale: ingIsRequiredForSale,
       };
@@ -2402,15 +2421,17 @@ export default function AdminPortalPage() {
                 <div className="flex flex-wrap items-center gap-2">
                   {/* Bộ lọc danh mục vật tư (Task 7) */}
                   <div className="flex items-center gap-1 p-1 bg-[#FAF6F0] rounded-xl border border-[#E6DDD5]">
-                    {[
-                      { id: "ALL", label: "Tất cả" },
-                      { id: "INGREDIENT", label: "☕ Nguyên liệu pha chế" },
-                      { id: "PACKAGING", label: "🥤 Bao bì & Vật tư" },
-                    ].map((cat) => (
+                    {(
+                      [
+                        { id: "ALL", label: "Tất cả" },
+                        { id: "INGREDIENT", label: "☕ Nguyên liệu pha chế" },
+                        { id: "PACKAGING", label: "🥤 Bao bì & Vật tư" },
+                      ] as const
+                    ).map((cat) => (
                       <button
                         key={cat.id}
                         type="button"
-                        onClick={() => setInventoryTypeFilter(cat.id as any)}
+                        onClick={() => setInventoryTypeFilter(cat.id)}
                         className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
                           inventoryTypeFilter === cat.id
                             ? "bg-[#2C1810] text-white shadow-xs"
@@ -2752,53 +2773,61 @@ export default function AdminPortalPage() {
                           </td>
                         </tr>
                       ) : (
-                        inventoryLogs.map((log) => (
-                          <tr key={log.id} className="hover:bg-[#FAF6F0]/60">
-                            <td className="py-3 px-4 text-[#7A6A5E] whitespace-nowrap">
-                              {new Date(log.createdAt).toLocaleString("vi-VN")}
-                            </td>
-                            <td className="py-3 px-4 font-bold text-[#2C1E18]">
-                              {log.ingredient?.name || `#${log.ingredientId}`}
-                            </td>
-                            <td className="py-3 px-4">
-                              <span
-                                className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                                  log.action === "RESTOCK"
-                                    ? "bg-[#DCFCE7] text-[#166534]"
-                                    : "bg-[#FEF3C7] text-[#B45309]"
+                        inventoryLogs.map((log) => {
+                          const logType = log.type || log.action;
+                          const logUnit = log.unit || log.ingredient?.unit || "";
+                          const logIngredientName =
+                            log.ingredientName ||
+                            log.ingredient?.name ||
+                            `#${log.ingredientId}`;
+                          return (
+                            <tr key={log.id} className="hover:bg-[#FAF6F0]/60">
+                              <td className="py-3 px-4 text-[#7A6A5E] whitespace-nowrap">
+                                {new Date(log.createdAt).toLocaleString("vi-VN")}
+                              </td>
+                              <td className="py-3 px-4 font-bold text-[#2C1E18]">
+                                {logIngredientName}
+                              </td>
+                              <td className="py-3 px-4">
+                                <span
+                                  className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                    logType === "RESTOCK"
+                                      ? "bg-[#DCFCE7] text-[#166534]"
+                                      : "bg-[#FEF3C7] text-[#B45309]"
+                                  }`}
+                                >
+                                  {logType === "RESTOCK" ? "NHẬP KHO (+)" : "KIỂM KÊ (=)"}
+                                </span>
+                              </td>
+                              <td
+                                className={`py-3 px-4 font-extrabold ${
+                                  log.changeAmount >= 0 ? "text-[#166534]" : "text-[#DC2626]"
                                 }`}
                               >
-                                {log.action === "RESTOCK" ? "NHẬP KHO (+)" : "KIỂM KÊ (=)"}
-                              </span>
-                            </td>
-                            <td
-                              className={`py-3 px-4 font-extrabold ${
-                                log.changeAmount >= 0 ? "text-[#166534]" : "text-[#DC2626]"
-                              }`}
-                            >
-                              {log.changeAmount >= 0 ? "+" : ""}
-                              {log.changeAmount.toLocaleString("vi-VN")}{" "}
-                              {log.ingredient?.unit || ""}
-                            </td>
-                            <td className="py-3 px-4 text-[#7A6A5E]">
-                              {log.previousStock.toLocaleString("vi-VN")} →{" "}
-                              <strong className="text-[#2C1E18]">
-                                {log.newStock.toLocaleString("vi-VN")} {log.ingredient?.unit || ""}
-                              </strong>
-                            </td>
-                            <td className="py-3 px-4 font-semibold text-[#9E5A2B]">
-                              {Number(log.unitCost || 0).toLocaleString("vi-VN")}đ/{log.ingredient?.unit || "đv"}
-                            </td>
-                            <td className="py-3 px-4 font-bold text-[#2C1E18]">
-                              {log.totalCost > 0
-                                ? `${Math.round(log.totalCost).toLocaleString("vi-VN")}đ`
-                                : "—"}
-                            </td>
-                            <td className="py-3 px-4 text-[#7A6A5E]">
-                              {log.note || "—"}
-                            </td>
-                          </tr>
-                        ))
+                                {log.changeAmount >= 0 ? "+" : ""}
+                                {log.changeAmount.toLocaleString("vi-VN")}{" "}
+                                {logUnit}
+                              </td>
+                              <td className="py-3 px-4 text-[#7A6A5E]">
+                                {log.previousStock.toLocaleString("vi-VN")} →{" "}
+                                <strong className="text-[#2C1E18]">
+                                  {log.newStock.toLocaleString("vi-VN")} {logUnit}
+                                </strong>
+                              </td>
+                              <td className="py-3 px-4 font-semibold text-[#9E5A2B]">
+                                {Number(log.unitCost || 0).toLocaleString("vi-VN")}đ/{logUnit || "đv"}
+                              </td>
+                              <td className="py-3 px-4 font-bold text-[#2C1E18]">
+                                {log.totalCost > 0
+                                  ? `${Math.round(log.totalCost).toLocaleString("vi-VN")}đ`
+                                  : "—"}
+                              </td>
+                              <td className="py-3 px-4 text-[#7A6A5E]">
+                                {log.note || "—"}
+                              </td>
+                            </tr>
+                          );
+                        })
                       )}
                     </tbody>
                   </table>
@@ -3467,7 +3496,7 @@ export default function AdminPortalPage() {
           {(activeTab === "overview" || activeTab === "revenue") && (
             <div className="space-y-6">
               {/* Biểu Đồ Thống Kê Doanh Thu 7 Ngày & Phân Bổ Nhóm Món Trực Quan */}
-              <RevenueChartSection allOrders={allOrders} products={products} />
+              <RevenueChartSection allOrders={chartOrders} products={products} />
               {/* Top Best-Sellers & Low Stock Alert Row */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 {/* Top Selling Products */}
@@ -4653,17 +4682,33 @@ export default function AdminPortalPage() {
             </p>
 
             <div className="my-4 p-3.5 rounded-2xl bg-[#FEF2F2] border border-red-200 space-y-1 text-xs text-[#991B1B]">
-              <p>
-                • Số dòng công thức BOM sẽ bị xóa tự động (Cascade):{" "}
-                <strong>{deleteTarget.recipesCount} dòng</strong>
-              </p>
-              {deleteTarget.type === "product" && (
-                <p>
-                  • Lịch sử đơn hàng đã mua món này (
-                  <strong>{deleteTarget.ordersCount ?? 0} ly</strong>) vẫn được
-                  giữ nguyên tên & giá trong hóa đơn cũ để bảo toàn báo cáo
-                  doanh thu.
-                </p>
+              {deleteTarget.type === "product" ? (
+                <>
+                  <p>
+                    • Số dòng công thức BOM sẽ bị xóa tự động (Cascade):{" "}
+                    <strong>{deleteTarget.recipesCount} dòng</strong>
+                  </p>
+                  <p>
+                    • Lịch sử đơn hàng đã mua món này (
+                    <strong>{deleteTarget.ordersCount ?? 0} ly</strong>) vẫn được
+                    giữ nguyên tên &amp; giá trong hóa đơn cũ để bảo toàn báo cáo
+                    doanh thu.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p>
+                    • Các liên kết công thức BOM chưa phát sinh lịch sử nhập/xuất
+                    kho (<strong>{deleteTarget.recipesCount} dòng</strong>) sẽ
+                    được dọn sạch khi xóa nguyên liệu này.
+                  </p>
+                  <p>
+                    • Nếu nguyên liệu đã có lịch sử phiếu kho (
+                    <code>InventoryLog</code>), hệ thống sẽ chặn xóa (
+                    <code>409 Conflict</code> / <code>onDelete: Restrict</code>) để
+                    bảo toàn chứng từ tài chính.
+                  </p>
+                </>
               )}
             </div>
 

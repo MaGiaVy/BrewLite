@@ -1,6 +1,6 @@
 "use client";
 
-import React, { Suspense, useEffect, useState, useRef, useCallback } from "react";
+import React, { Suspense, useEffect, useState, useRef, useCallback, useMemo, useSyncExternalStore } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
@@ -235,42 +235,42 @@ function OrderConfirmationContent() {
     "idle"
   );
   const prevStatusRef = useRef<string | null>(null);
-  const [customizationsMap, setCustomizationsMap] = useState<
-    Record<
-      string,
-      {
-        temp?: string;
-        temperature?: "HOT" | "COLD";
-        iceLevel?: string;
-        sugarLevel?: string;
-        servingStyle?: string;
-        isBakery?: boolean;
-        notes?: string;
-      }
-    >
-  >({});
-
-  useEffect(() => {
-    if (!validOrderId || typeof window === "undefined") return;
+  const mounted = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false
+  );
+  const customizationsMap = useMemo(() => {
+    type CustomizationEntry = {
+      productId?: number;
+      temp?: string;
+      temperature?: "HOT" | "COLD";
+      iceLevel?: string;
+      sugarLevel?: string;
+      servingStyle?: string;
+      isBakery?: boolean;
+      notes?: string;
+    };
+    const map: Record<string, CustomizationEntry> = {};
+    if (!mounted || !validOrderId) return map;
     try {
       const stored = localStorage.getItem(`order_customizations_${validOrderId}`);
       if (stored) {
         const list = JSON.parse(stored);
         if (Array.isArray(list)) {
-          const map: Record<string, any> = {};
-          list.forEach((entry, idx) => {
+          list.forEach((entry: CustomizationEntry, idx: number) => {
             map[`idx_${idx}`] = entry;
             if (entry.productId) {
               map[`prod_${entry.productId}`] = entry;
             }
           });
-          setCustomizationsMap(map);
         }
       }
     } catch {
       // ignore
     }
-  }, [validOrderId]);
+    return map;
+  }, [mounted, validOrderId]);
 
   const playReadyChime = useCallback(() => {
     try {
