@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import BrewLiteLogo from "../components/BrewLiteLogo";
 import { useAuthStore, apiFetch } from "../store/authStore";
+import { findNewPaidOrderIds, playWebAudioChime } from "../../lib/kds-chime";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -82,6 +83,7 @@ interface StandardProductRecipe {
   imageUrl?: string | null;
   availableServings?: number;
   isOutOfStock?: boolean;
+  isSoldOutManual?: boolean;
   recipes: Array<{
     id: number;
     size: string;
@@ -100,37 +102,6 @@ interface StandardToppingRecipe {
 }
 
 type StaffViewTab = "kds" | "lookup" | "history";
-
-// ─── Helper: Web Audio Chime ────────────────────────────────────────────────
-
-function playWebAudioChime() {
-  if (typeof window === "undefined") return;
-  try {
-    const AudioCtx =
-      window.AudioContext ||
-      (window as unknown as { webkitAudioContext: typeof AudioContext })
-        .webkitAudioContext;
-    const ctx = new AudioCtx();
-    const now = ctx.currentTime;
-
-    // 2-tone coffee bar chime (E5 -> B5)
-    const freqs = [659.25, 987.77];
-    freqs.forEach((freq, idx) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(freq, now + idx * 0.14);
-      gain.gain.setValueAtTime(0.18, now + idx * 0.14);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.14 + 0.45);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(now + idx * 0.14);
-      osc.stop(now + idx * 0.14 + 0.46);
-    });
-  } catch {
-    // Ignore audio context block if user hasn't interacted yet
-  }
-}
 
 function parseToppingsList(toppings: string[] | string | null | undefined): string[] {
   if (!toppings) return [];
@@ -163,6 +134,7 @@ export default function BaristaKdsPage() {
   const [standardToppings, setStandardToppings] = useState<StandardToppingRecipe[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [updatingOrderIds, setUpdatingOrderIds] = useState<Record<number, boolean>>({});
+  const [togglingSoldOutIds, setTogglingSoldOutIds] = useState<Record<number, boolean>>({});
 
   // Workbench & Interactive Checklist States
   const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
@@ -189,15 +161,21 @@ export default function BaristaKdsPage() {
   } | null>(null);
 
   const prevPaidIdsRef = useRef<Set<number>>(new Set());
+  const hasLoadedQueueOnceRef = useRef<boolean>(false);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Live 1-second timer for SLA & Digital Clock
   useEffect(() => {
-    setNowMs(Date.now());
+    const initTimer = setTimeout(() => {
+      setNowMs(Date.now());
+    }, 0);
     const timer = setInterval(() => {
       setNowMs(Date.now());
     }, 1000);
-    return () => clearInterval(timer);
+    return () => {
+      clearTimeout(initTimer);
+      clearInterval(timer);
+    };
   }, []);
 
   // Auth & Role Guard
@@ -211,17 +189,20 @@ export default function BaristaKdsPage() {
     }
   }, [_hasHydrated, isAuthenticated, user, router]);
 
-  const showToast = (msg: string, variant: "default" | "error" = "default") => {
-    if (toastTimerRef.current) {
-      clearTimeout(toastTimerRef.current);
-    }
-    setToastMsg(msg);
-    setToastVariant(variant);
-    toastTimerRef.current = setTimeout(
-      () => setToastMsg(null),
-      variant === "error" ? 4500 : 3200
-    );
-  };
+  const showToast = useCallback(
+    (msg: string, variant: "default" | "error" = "default") => {
+      if (toastTimerRef.current) {
+        clearTimeout(toastTimerRef.current);
+      }
+      setToastMsg(msg);
+      setToastVariant(variant);
+      toastTimerRef.current = setTimeout(
+        () => setToastMsg(null),
+        variant === "error" ? 4500 : 3200
+      );
+    },
+    []
+  );
 
   useEffect(() => {
     return () => {
@@ -239,19 +220,20 @@ export default function BaristaKdsPage() {
       if (!res.ok) return;
       const data: BaristaOrder[] = await res.json();
       if (Array.isArray(data)) {
-        const currentPaidIds = new Set(
-          data.filter((o) => o.status === "PAID").map((o) => o.id)
-        );
-        if (prevPaidIdsRef.current.size > 0 && soundEnabled) {
-          for (const id of currentPaidIds) {
-            if (!prevPaidIdsRef.current.has(id)) {
-              playWebAudioChime();
-              showToast(`🔔 Đơn mới #BL-${id} vừa thanh toán! Đã đưa vào hàng đợi.`);
-              break;
-            }
-          }
+        const { newPaidOrderIds, nextPaidIds, nextHasLoadedOnce } =
+          findNewPaidOrderIds(
+            data,
+            prevPaidIdsRef.current,
+            hasLoadedQueueOnceRef.current
+          );
+        if (newPaidOrderIds.length > 0 && soundEnabled) {
+          playWebAudioChime();
+          showToast(
+            `🔔 Đơn mới #BL-${newPaidOrderIds[0]} vừa thanh toán! Đã đưa vào hàng đợi.`
+          );
         }
-        prevPaidIdsRef.current = currentPaidIds;
+        prevPaidIdsRef.current = nextPaidIds;
+        hasLoadedQueueOnceRef.current = nextHasLoadedOnce;
         setOrders(data);
       }
     } catch {
@@ -259,7 +241,7 @@ export default function BaristaKdsPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [_hasHydrated, isAuthenticated, user, soundEnabled]);
+  }, [_hasHydrated, isAuthenticated, user, soundEnabled, showToast]);
 
   // Fetch Stock & Standard Recipe Matrix for Tab 2 & KPI alerts
   const fetchStockAndRecipes = useCallback(async () => {
@@ -285,12 +267,24 @@ export default function BaristaKdsPage() {
         setStandardProducts(
           rawProds.map((rp) => {
             const matched = Array.isArray(prodList)
-              ? prodList.find((p: { id: number }) => p.id === rp.id)
+              ? prodList.find(
+                  (p: {
+                    id: number;
+                    availableServings?: number;
+                    isOutOfStock?: boolean;
+                    isSoldOutManual?: boolean;
+                  }) => p.id === rp.id
+                )
               : null;
+            const isSoldOutManual =
+              typeof matched?.isSoldOutManual === "boolean"
+                ? matched.isSoldOutManual
+                : Boolean(rp.isSoldOutManual);
             return {
               ...rp,
               availableServings: matched?.availableServings ?? 0,
-              isOutOfStock: matched?.isOutOfStock ?? false,
+              isOutOfStock: matched?.isOutOfStock ?? isSoldOutManual,
+              isSoldOutManual,
             };
           })
         );
@@ -304,11 +298,18 @@ export default function BaristaKdsPage() {
   }, [_hasHydrated, isAuthenticated, user]);
 
   useEffect(() => {
-    fetchQueue();
-    fetchStockAndRecipes();
-    const qInterval = setInterval(fetchQueue, 3000);
-    const sInterval = setInterval(fetchStockAndRecipes, 12000);
+    const initTimer = setTimeout(() => {
+      void fetchQueue();
+      void fetchStockAndRecipes();
+    }, 0);
+    const qInterval = setInterval(() => {
+      void fetchQueue();
+    }, 3000);
+    const sInterval = setInterval(() => {
+      void fetchStockAndRecipes();
+    }, 12000);
     return () => {
+      clearTimeout(initTimer);
       clearInterval(qInterval);
       clearInterval(sInterval);
     };
@@ -360,22 +361,84 @@ export default function BaristaKdsPage() {
     [preparingOrders, paidOrders, readyOrders]
   );
 
-  // Auto-select an active order for the right-hand Preparation Workbench
-  useEffect(() => {
-    if (activeKdsOrders.length === 0) {
-      if (selectedOrderId !== null) setSelectedOrderId(null);
-      return;
-    }
-    const stillExists = activeKdsOrders.some((o) => o.id === selectedOrderId);
-    if (!stillExists) {
-      setSelectedOrderId(activeKdsOrders[0].id);
-    }
+  const selectedOrder = useMemo(() => {
+    if (activeKdsOrders.length === 0) return null;
+    return (
+      activeKdsOrders.find((o) => o.id === selectedOrderId) ||
+      activeKdsOrders[0]
+    );
   }, [activeKdsOrders, selectedOrderId]);
 
-  const selectedOrder = useMemo(
-    () => activeKdsOrders.find((o) => o.id === selectedOrderId) || null,
-    [activeKdsOrders, selectedOrderId]
+  const soldOutManualCount = useMemo(
+    () => standardProducts.filter((p) => Boolean(p.isSoldOutManual)).length,
+    [standardProducts]
   );
+
+  const handleToggleSoldOut = async (prod: StandardProductRecipe) => {
+    if (togglingSoldOutIds[prod.id]) return;
+    const nextSoldOut = !Boolean(prod.isSoldOutManual);
+    setTogglingSoldOutIds((prev) => ({ ...prev, [prod.id]: true }));
+    setActionError(null);
+    try {
+      const res = await apiFetch(`/products/${prod.id}/sold-out`, {
+        method: "PATCH",
+        body: JSON.stringify({ isSoldOutManual: nextSoldOut }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        const backendMsg = Array.isArray(err?.message)
+          ? err.message.join(", ")
+          : typeof err?.message === "string"
+          ? err.message
+          : "";
+        const msg =
+          backendMsg || `Không thể cập nhật trạng thái báo hết món (${prod.name})`;
+        setActionError(msg);
+        showToast(msg, "error");
+        return;
+      }
+      const updated = await res.json().catch(() => null);
+      const confirmedSoldOut =
+        typeof updated?.isSoldOutManual === "boolean"
+          ? updated.isSoldOutManual
+          : nextSoldOut;
+      setStandardProducts((prev) =>
+        prev.map((item) =>
+          item.id === prod.id
+            ? {
+                ...item,
+                isSoldOutManual: confirmedSoldOut,
+                isOutOfStock:
+                  typeof updated?.isOutOfStock === "boolean"
+                    ? updated.isOutOfStock
+                    : confirmedSoldOut,
+                availableServings:
+                  typeof updated?.availableServings === "number"
+                    ? updated.availableServings
+                    : confirmedSoldOut
+                    ? 0
+                    : item.availableServings,
+              }
+            : item
+        )
+      );
+      showToast(
+        confirmedSoldOut
+          ? `🚫 Đã báo hết món (86): ${prod.name}`
+          : `✅ Đã mở bán lại: ${prod.name}`
+      );
+    } catch {
+      const msg = `Lỗi kết nối máy chủ khi cập nhật 86 cho ${prod.name}`;
+      setActionError(msg);
+      showToast(msg, "error");
+    } finally {
+      setTogglingSoldOutIds((prev) => {
+        const next = { ...prev };
+        delete next[prod.id];
+        return next;
+      });
+    }
+  };
 
   const toggleChecklistStep = (key: string) => {
     setCheckedSteps((prev) => ({
@@ -753,6 +816,25 @@ export default function BaristaKdsPage() {
               </span>
               <span className="hidden md:inline">
                 {soundEnabled ? "Chuông BẬT" : "TẮT"}
+              </span>
+            </button>
+
+            {/* Quick 86 / Out-of-Stock Switcher */}
+            <button
+              type="button"
+              onClick={() => setActiveTab("lookup")}
+              className={`px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 border transition-all cursor-pointer ${
+                soldOutManualCount > 0
+                  ? "bg-[#991B1B] border-red-400/50 text-white shadow-sm"
+                  : "bg-white/10 border-white/15 text-[#FEBC85] hover:bg-white/20"
+              }`}
+              title="Mở bảng Báo hết món (86) & Tra cứu tồn kho"
+            >
+              <span className="material-symbols-outlined text-base">
+                block
+              </span>
+              <span className="hidden md:inline">
+                Báo hết món (86){soldOutManualCount > 0 ? ` (${soldOutManualCount})` : ""}
               </span>
             </button>
 
@@ -1262,7 +1344,7 @@ export default function BaristaKdsPage() {
                       key={prod.id}
                       className="bg-white rounded-3xl p-5 border border-[#E6DCD2] shadow-xs flex flex-col gap-3"
                     >
-                      <div className="flex items-center justify-between border-b border-[#E6DCD2] pb-2.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2.5 border-b border-[#E6DCD2] pb-2.5">
                         <div>
                           <h4 className="font-headline font-bold text-base text-[#2C1810]">
                             {prod.name}
@@ -1271,17 +1353,42 @@ export default function BaristaKdsPage() {
                             Giá niêm yết: {prod.basePrice.toLocaleString("vi-VN")}đ
                           </span>
                         </div>
-                        <span
-                          className={`px-3 py-1 rounded-full text-xs font-mono font-bold ${
-                            prod.isOutOfStock
-                              ? "bg-[#991B1B] text-white"
-                              : "bg-[#ECFDF5] text-[#2D6A4F] border border-[#A7F3D0]"
-                          }`}
-                        >
-                          {prod.isOutOfStock
-                            ? "Tạm hết nguyên liệu"
-                            : `Pha được ~${prod.availableServings ?? 0} phần`}
-                        </span>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span
+                            className={`px-3 py-1 rounded-full text-xs font-mono font-bold ${
+                              prod.isSoldOutManual || prod.isOutOfStock
+                                ? "bg-[#991B1B] text-white"
+                                : "bg-[#ECFDF5] text-[#2D6A4F] border border-[#A7F3D0]"
+                            }`}
+                          >
+                            {prod.isSoldOutManual
+                              ? "Hết món (86)"
+                              : prod.isOutOfStock
+                              ? "Tạm hết nguyên liệu"
+                              : `Pha được ~${prod.availableServings ?? 0} phần`}
+                          </span>
+                          <button
+                            type="button"
+                            disabled={Boolean(togglingSoldOutIds[prod.id])}
+                            onClick={() => void handleToggleSoldOut(prod)}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50 ${
+                              prod.isSoldOutManual
+                                ? "bg-[#2D6A4F] hover:bg-[#23533D] text-white shadow-xs"
+                                : "bg-[#FEF2F2] hover:bg-[#991B1B] text-[#991B1B] hover:text-white border border-[#FECACA]"
+                            }`}
+                          >
+                            <span className="material-symbols-outlined text-sm">
+                              {prod.isSoldOutManual ? "check_circle" : "block"}
+                            </span>
+                            <span>
+                              {togglingSoldOutIds[prod.id]
+                                ? "Đang lưu..."
+                                : prod.isSoldOutManual
+                                ? "Mở bán lại"
+                                : "Báo hết món (86)"}
+                            </span>
+                          </button>
+                        </div>
                       </div>
 
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
