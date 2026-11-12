@@ -407,7 +407,7 @@ export class PaymentsService {
     dto: CreatePaymentDto,
     userId: number,
     idempotencyKey?: string,
-    userRole?: Role,
+    _userRole?: Role,
   ): Promise<PaymentResponse> {
     this.assertValidOrderId(dto?.orderId);
 
@@ -745,7 +745,7 @@ export class PaymentsService {
   async createZaloPayOrder(
     orderId: number,
     userId: number,
-    userRole?: Role,
+    _userRole?: Role,
   ): Promise<ZaloPayCreateOrderResult> {
     this.assertValidOrderId(orderId);
 

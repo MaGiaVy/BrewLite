@@ -198,6 +198,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
                 userId,
                 discountCode: code,
                 status: { in: [OrderStatus.PENDING, OrderStatus.PAYMENT_FAILED] },
+                voucherDeducted: false,
               },
             });
             if (pendingWithVoucher >= (personalVoucher.quantity || 1)) {

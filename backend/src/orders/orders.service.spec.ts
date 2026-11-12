@@ -3126,5 +3126,60 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
       expect(mockTx.userVoucher.deleteMany).not.toHaveBeenCalled();
       expect(mockTx.order.create).not.toHaveBeenCalled();
     });
+
+    it('createOrder filters pendingWithVoucher with voucherDeducted: false so already-deducted pending orders do not double-count remaining UserVoucher.quantity', async () => {
+      const orderCountMock = vi.fn().mockImplementation(async ({ where }: any) => {
+        if (where?.discountCode === 'PERSONAL10') {
+          return where.voucherDeducted === false ? 0 : 1;
+        }
+        return 1;
+      });
+      const mockTx = {
+        $queryRaw: vi.fn().mockResolvedValue([{ id: 1 }]),
+        userVoucher: {
+          findUnique: vi.fn().mockResolvedValue({
+            id: 89,
+            userId: 1,
+            code: 'PERSONAL10',
+            quantity: 1,
+            discountPercent: 10,
+            minOrderAmount: 0,
+            maxDiscountAmount: 15000,
+          }),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+          deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+        order: {
+          count: orderCountMock,
+          create: vi.fn().mockImplementation(({ data }: any) =>
+            Promise.resolve({ id: 991, status: OrderStatus.PENDING, items: [], ...data }),
+          ),
+        },
+      };
+      prisma.$transaction.mockImplementationOnce(async (cb: any) => cb(mockTx));
+
+      const res = await service.createOrder(
+        {
+          items: [{ productId: 1, size: 'M', toppings: [], quantity: 1 }],
+          discountCode: 'PERSONAL10',
+        } as any,
+        1,
+      );
+
+      expect(res.orderId).toBe(991);
+      expect(orderCountMock).toHaveBeenNthCalledWith(2, {
+        where: {
+          userId: 1,
+          discountCode: 'PERSONAL10',
+          status: { in: [OrderStatus.PENDING, OrderStatus.PAYMENT_FAILED] },
+          voucherDeducted: false,
+        },
+      });
+      expect(mockTx.order.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ voucherDeducted: true }),
+        }),
+      );
+    });
   });
 });
