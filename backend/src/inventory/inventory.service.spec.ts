@@ -548,5 +548,61 @@ describe('InventoryService — Sprint 4 (Admin BOM Warehouse, Full CRUD & Optimi
       expect(mockTx.ingredient.update).toHaveBeenCalled();
       expect(stats.recentOrders[0].status).toBe('CANCELLED');
     });
+
+    it('returns full 7-day chartOrders (>50) and full stats while capping recentOrders at 50', async () => {
+      const now = Date.now();
+      const orders = Array.from({ length: 65 }, (_, idx) => ({
+        id: idx + 1,
+        status: idx % 2 === 0 ? 'COMPLETED' : 'PAID',
+        totalAmount: 50000,
+        createdAt: new Date(now - idx * 60 * 60 * 1000),
+        items: [
+          {
+            productId: 1,
+            productName: 'Cà phê Sữa Đá',
+            size: 'M',
+            quantity: 1,
+            unitPrice: 50000,
+          },
+        ],
+        user: null,
+      }));
+      orders.push({
+        id: 999,
+        status: 'CANCELLED',
+        totalAmount: 50000,
+        createdAt: new Date(now),
+        items: [],
+        user: null,
+      });
+
+      mockPrisma.order.findMany.mockResolvedValueOnce(orders);
+      mockPrisma.ingredient.findMany.mockResolvedValue([]);
+      mockPrisma.storeSetting.findMany.mockResolvedValue([]);
+      mockPrisma.discountCode.findMany.mockResolvedValue([]);
+      mockPrisma.inventoryLog.findMany.mockResolvedValue([]);
+      mockPrisma.recipe.findMany = vi.fn().mockResolvedValue([
+        {
+          productId: 1,
+          size: 'M',
+          amount: 10,
+          ingredient: { costPerUnit: 1000 },
+        },
+      ]);
+
+      const stats = await service.getDashboardStats();
+
+      expect(mockPrisma.order.findMany).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          where: { createdAt: { gte: expect.any(Date) } },
+          take: 1000,
+        }),
+      );
+      expect(stats.recentOrders).toHaveLength(50);
+      expect((stats as any).chartOrders).toHaveLength(65);
+      expect(stats.totalRevenue).toBe(65 * 50000);
+      expect(stats.totalCogsSold).toBe(65 * 10000);
+      expect(stats.topSellingProducts[0].totalQuantity).toBe(65);
+    });
   });
 });

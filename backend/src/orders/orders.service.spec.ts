@@ -2841,36 +2841,80 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('[BE-M1] getBaristaQueue bounds COMPLETED orders to 24h and strips email PII while keeping fullName/phone', async () => {
-      prisma.order.findMany.mockResolvedValueOnce([]);
+    it('[BE-M1] getBaristaQueue splits active (uncapped) and COMPLETED (24h, take 50) queries while stripping email PII', async () => {
+      prisma.order.findMany
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([]);
       (prisma as any).recipe = { findMany: vi.fn().mockResolvedValue([]) };
       (prisma as any).toppingRecipe = { findMany: vi.fn().mockResolvedValue([]) };
 
       await service.getBaristaQueue();
 
-      expect(prisma.order.findMany).toHaveBeenCalledWith(
+      expect(prisma.order.findMany).toHaveBeenCalledTimes(2);
+      const activeCall = prisma.order.findMany.mock.calls[0][0];
+      const completedCall = prisma.order.findMany.mock.calls[1][0];
+
+      expect(activeCall).toEqual(
         expect.objectContaining({
           where: {
-            OR: [
-              {
-                status: {
-                  in: [OrderStatus.PAID, OrderStatus.PREPARING, OrderStatus.READY],
-                },
-              },
-              {
-                status: OrderStatus.COMPLETED,
-                updatedAt: { gte: expect.any(Date) },
-              },
-            ],
+            status: {
+              in: [OrderStatus.PAID, OrderStatus.PREPARING, OrderStatus.READY],
+            },
           },
           include: expect.objectContaining({
             user: {
               select: { id: true, fullName: true, phone: true },
             },
           }),
-          take: 200,
+          orderBy: { createdAt: 'asc' },
         }),
       );
+      expect(activeCall.take).toBeUndefined();
+
+      expect(completedCall).toEqual(
+        expect.objectContaining({
+          where: {
+            status: OrderStatus.COMPLETED,
+            updatedAt: { gte: expect.any(Date) },
+          },
+          include: expect.objectContaining({
+            user: {
+              select: { id: true, fullName: true, phone: true },
+            },
+          }),
+          orderBy: { updatedAt: 'desc' },
+          take: 50,
+        }),
+      );
+    });
+
+    it('getBaristaQueue still returns active PAID orders even when 200+ COMPLETED orders exist', async () => {
+      const activePaidOrder = {
+        id: 9999,
+        status: OrderStatus.PAID,
+        createdAt: new Date('2026-11-12T10:00:00Z'),
+        items: [{ id: 1, productId: 1, size: 'M', toppings: [], quantity: 1 }],
+        user: { id: 1, fullName: 'Khách A', phone: '0900000001' },
+      };
+      const completedBatch = Array.from({ length: 50 }, (_, idx) => ({
+        id: 8000 + idx,
+        status: OrderStatus.COMPLETED,
+        updatedAt: new Date(),
+        items: [{ id: idx + 10, productId: 1, size: 'M', toppings: [], quantity: 1 }],
+        user: { id: 2, fullName: 'Khách B', phone: '0900000002' },
+      }));
+
+      prisma.order.findMany
+        .mockResolvedValueOnce([activePaidOrder])
+        .mockResolvedValueOnce(completedBatch);
+      (prisma as any).recipe = { findMany: vi.fn().mockResolvedValue([]) };
+      (prisma as any).toppingRecipe = { findMany: vi.fn().mockResolvedValue([]) };
+
+      const queue = await service.getBaristaQueue();
+
+      expect(queue).toHaveLength(51);
+      expect(queue[0].id).toBe(9999);
+      expect(queue[0].status).toBe(OrderStatus.PAID);
     });
 
     it('[BE-M2] getOrderById and getMyOrders scope expired-order sweep instead of global sweep', async () => {
@@ -3180,6 +3224,135 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
           data: expect.objectContaining({ voucherDeducted: true }),
         }),
       );
+    });
+  });
+
+  describe('Task 3 — Orders Idempotency-Key Parity (Replay, 409 Conflict, P2002 Race)', () => {
+    it('reuses existing order on matching Idempotency-Key + payload and throws ConflictException on payload mismatch', async () => {
+      const dto = {
+        items: [
+          {
+            productId: 1,
+            productName: 'Cà phê Muối',
+            size: 'M',
+            toppings: [],
+            quantity: 1,
+          },
+        ],
+      };
+
+      const txOrderCreate = vi.fn().mockResolvedValue({
+        id: 950,
+        status: OrderStatus.PENDING,
+        totalAmount: 54000,
+        discountCode: null,
+        discountAmount: 0,
+        items: [{ id: 1, productId: 1, size: 'M', toppings: [], quantity: 1, unitPrice: 50000 }],
+      });
+
+      prisma.order.findUnique.mockResolvedValueOnce(null);
+      prisma.$transaction.mockImplementationOnce(async (cb: any) =>
+        cb({
+          recipe: { findMany: vi.fn().mockResolvedValue([]) },
+          toppingRecipe: { findMany: vi.fn().mockResolvedValue([]) },
+          ingredient: { findMany: vi.fn().mockResolvedValue([]), findUnique: vi.fn() },
+          order: { count: vi.fn().mockResolvedValue(0), create: txOrderCreate },
+        }),
+      );
+
+      const first = await (service as any).createOrder(dto, 1, 'idem-order-1');
+      expect((first as any).id).toBe(950);
+      expect(first.orderId).toBe(950);
+      expect(txOrderCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            idempotencyKey: 'idem-order-1',
+            idempotencyPayload: expect.any(String),
+          }),
+        }),
+      );
+
+      const storedPayload = txOrderCreate.mock.calls[0][0].data.idempotencyPayload;
+      prisma.order.findUnique.mockResolvedValueOnce({
+        id: 950,
+        status: OrderStatus.PENDING,
+        totalAmount: 54000,
+        discountCode: null,
+        discountAmount: 0,
+        idempotencyKey: 'idem-order-1',
+        idempotencyPayload: storedPayload,
+        items: [{ id: 1, productId: 1, size: 'M', toppings: [], quantity: 1, unitPrice: 50000 }],
+      });
+
+      const replay = await (service as any).createOrder(dto, 1, 'idem-order-1');
+      expect((replay as any).id).toBe(950);
+      expect(replay.orderId).toBe(950);
+      expect((replay as any).isIdempotent).toBe(true);
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+
+      prisma.order.findUnique.mockResolvedValueOnce({
+        id: 950,
+        idempotencyKey: 'idem-order-1',
+        idempotencyPayload: storedPayload,
+        items: [],
+      });
+
+      await expect(
+        (service as any).createOrder(
+          { items: [{ productId: 1, size: 'L', toppings: [], quantity: 2 }] },
+          1,
+          'idem-order-1',
+        ),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('replays concurrent order when $transaction fails with P2002 on userId_idempotencyKey', async () => {
+      const dto = {
+        items: [
+          {
+            productId: 1,
+            productName: 'Cà phê Muối',
+            size: 'M',
+            toppings: [],
+            quantity: 1,
+          },
+        ],
+      };
+
+      prisma.order.findUnique.mockResolvedValueOnce(null);
+      prisma.$transaction.mockRejectedValueOnce({ code: 'P2002' });
+
+      const expectedPayload = JSON.stringify({
+        discountCode: null,
+        items: [
+          {
+            productId: 1,
+            size: 'M',
+            sugarLevel: '100%',
+            iceLevel: '100%',
+            temperature: 'COLD',
+            notes: null,
+            toppings: [],
+            quantity: 1,
+          },
+        ],
+      });
+
+      prisma.order.findUnique.mockResolvedValueOnce({
+        id: 951,
+        status: OrderStatus.PENDING,
+        totalAmount: 54000,
+        discountCode: null,
+        discountAmount: 0,
+        idempotencyKey: 'idem-race-1',
+        idempotencyPayload: expectedPayload,
+        items: [],
+      });
+
+      const res = await (service as any).createOrder(dto, 1, 'idem-race-1');
+      expect((res as any).id).toBe(951);
+      expect(res.orderId).toBe(951);
+      expect((res as any).isIdempotent).toBe(true);
     });
   });
 });

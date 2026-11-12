@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Headers,
   Param,
   ParseIntPipe,
   Patch,
@@ -33,8 +34,12 @@ export class OrdersController {
    */
   @UseGuards(JwtAuthGuard)
   @Post()
-  createOrder(@Request() req: AuthRequest, @Body() dto: CreateOrderDto) {
-    return this.ordersService.createOrder(dto, req.user.userId);
+  createOrder(
+    @Request() req: AuthRequest,
+    @Body() dto: CreateOrderDto,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
+    return this.ordersService.createOrder(dto, req.user.userId, idempotencyKey);
   }
 
   /**

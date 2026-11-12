@@ -955,10 +955,15 @@ export class InventoryService {
   async getDashboardStats() {
     await expirePendingOrders(this.prisma, this.logger);
 
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    sevenDaysAgo.setHours(0, 0, 0, 0);
+
     const [ingredients, orders, sizePricing, vouchers, logs, allRecipes] =
       await Promise.all([
         this.getAllIngredients(),
         this.prisma.order.findMany({
+          where: { createdAt: { gte: sevenDaysAgo } },
           include: {
             items: true,
             user: {
@@ -966,7 +971,7 @@ export class InventoryService {
             },
           },
           orderBy: { createdAt: 'desc' },
-          take: 100,
+          take: 1000,
         }),
         this.getGlobalSizePricing(),
         this.getAllVouchers(false),
@@ -1088,6 +1093,7 @@ export class InventoryService {
       inventoryLogs: logs,
       topSellingProducts,
       recentOrders: orders.slice(0, 50),
+      chartOrders: validOrders,
     };
   }
 }

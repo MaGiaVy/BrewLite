@@ -59,7 +59,61 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
 
   private computeRequiredIngredients = computeRequiredIngredients;
 
-  async createOrder(dto: CreateOrderDto, userId: number) {
+  private serializeOrderPayload(dto: CreateOrderDto): string {
+    return JSON.stringify({
+      discountCode: dto.discountCode?.trim().toUpperCase() || null,
+      items: (dto.items || []).map((item) => ({
+        productId: item.productId,
+        size: (item.size || 'M').toUpperCase(),
+        sugarLevel: item.sugarLevel ?? '100%',
+        iceLevel: item.iceLevel ?? '100%',
+        temperature: item.temperature ?? 'COLD',
+        notes: item.notes ?? null,
+        toppings: [...(item.toppings || [])],
+        quantity: item.quantity,
+      })),
+    });
+  }
+
+  private buildCreateOrderResponse(order: any, extra?: { isIdempotent?: boolean }) {
+    return {
+      id: order.id,
+      orderId: order.id,
+      status: order.status,
+      totalAmount: order.totalAmount,
+      discountCode: order.discountCode,
+      discountAmount: order.discountAmount,
+      items: order.items,
+      ...(extra?.isIdempotent ? { isIdempotent: true } : {}),
+    };
+  }
+
+  async createOrder(dto: CreateOrderDto, userId: number, idempotencyKey?: string) {
+    const normalizedKey = idempotencyKey?.trim() || undefined;
+    const payloadSnapshot = normalizedKey ? this.serializeOrderPayload(dto) : undefined;
+
+    if (userId && normalizedKey && this.prisma.order?.findUnique) {
+      const existingOrder = await this.prisma.order.findUnique({
+        where: {
+          userId_idempotencyKey: {
+            userId,
+            idempotencyKey: normalizedKey,
+          },
+        },
+        include: { items: true },
+      });
+      if (existingOrder) {
+        if (
+          existingOrder.idempotencyPayload &&
+          existingOrder.idempotencyPayload !== payloadSnapshot
+        ) {
+          throw new ConflictException(
+            'Idempotency-Key đã được sử dụng với nội dung đơn hàng khác.',
+          );
+        }
+        return this.buildCreateOrderResponse(existingOrder, { isIdempotent: true });
+      }
+    }
     // 1. Tính rawSubtotal và serverUnitPrice hoàn toàn từ DB
     const productIds = [...new Set(dto.items.map((i) => i.productId))];
 
@@ -139,7 +193,8 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
     }
 
     // 2. Transaction: Kiểm tra tồn kho, trừ tồn kho Optimistic Locking, kiểm tra & giữ Voucher, tạo đơn PENDING
-    const order = await this.prisma.$transaction(async (tx: any) => {
+    try {
+      const order = await this.prisma.$transaction(async (tx: any) => {
       if (userId && typeof tx.$queryRaw === 'function') {
         await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${userId} FOR UPDATE`;
       }
@@ -405,6 +460,12 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
           discountAmount,
           voucherDeducted,
           userId,
+          ...(normalizedKey
+            ? {
+                idempotencyKey: normalizedKey,
+                idempotencyPayload: payloadSnapshot,
+              }
+            : {}),
           items: {
             create: dto.items.map((item, idx) => ({
               productId: item.productId,
@@ -448,14 +509,32 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       return newOrder;
     });
 
-    return {
-      orderId: order.id,
-      status: order.status,
-      totalAmount: order.totalAmount,
-      discountCode: order.discountCode,
-      discountAmount: order.discountAmount,
-      items: order.items,
-    };
+      return this.buildCreateOrderResponse(order);
+    } catch (err: any) {
+      if (err?.code === 'P2002' && userId && normalizedKey && this.prisma.order?.findUnique) {
+        const concurrentOrder = await this.prisma.order.findUnique({
+          where: {
+            userId_idempotencyKey: {
+              userId,
+              idempotencyKey: normalizedKey,
+            },
+          },
+          include: { items: true },
+        });
+        if (concurrentOrder) {
+          if (
+            concurrentOrder.idempotencyPayload &&
+            concurrentOrder.idempotencyPayload !== payloadSnapshot
+          ) {
+            throw new ConflictException(
+              'Idempotency-Key đã được sử dụng với nội dung đơn hàng khác.',
+            );
+          }
+          return this.buildCreateOrderResponse(concurrentOrder, { isIdempotent: true });
+        }
+      }
+      throw err;
+    }
   }
 
   /**
@@ -495,41 +574,45 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
    */
   async getBaristaQueue() {
     const completedWindowStart = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const [orders, allRecipes, allToppingRecipes] = await Promise.all([
-      this.prisma.order.findMany({
-        where: {
-          OR: [
-            {
-              status: {
-                in: [
-                  OrderStatus.PAID,
-                  OrderStatus.PREPARING,
-                  OrderStatus.READY,
-                ],
-              },
+    const orderInclude = {
+      items: true,
+      user: {
+        select: { id: true, fullName: true, phone: true },
+      },
+    };
+    const [activeOrders, completedOrders, allRecipes, allToppingRecipes] =
+      await Promise.all([
+        this.prisma.order.findMany({
+          where: {
+            status: {
+              in: [
+                OrderStatus.PAID,
+                OrderStatus.PREPARING,
+                OrderStatus.READY,
+              ],
             },
-            {
-              status: OrderStatus.COMPLETED,
-              updatedAt: { gte: completedWindowStart },
-            },
-          ],
-        },
-        include: {
-          items: true,
-          user: {
-            select: { id: true, fullName: true, phone: true },
           },
-        },
-        orderBy: { createdAt: 'asc' },
-        take: 200,
-      }),
-      this.prisma.recipe
-        ? this.prisma.recipe.findMany({ include: { ingredient: true } })
-        : Promise.resolve([]),
-      this.prisma.toppingRecipe
-        ? this.prisma.toppingRecipe.findMany({ include: { ingredient: true } })
-        : Promise.resolve([]),
-    ]);
+          include: orderInclude,
+          orderBy: { createdAt: 'asc' },
+        }),
+        this.prisma.order.findMany({
+          where: {
+            status: OrderStatus.COMPLETED,
+            updatedAt: { gte: completedWindowStart },
+          },
+          include: orderInclude,
+          orderBy: { updatedAt: 'desc' },
+          take: 50,
+        }),
+        this.prisma.recipe
+          ? this.prisma.recipe.findMany({ include: { ingredient: true } })
+          : Promise.resolve([]),
+        this.prisma.toppingRecipe
+          ? this.prisma.toppingRecipe.findMany({ include: { ingredient: true } })
+          : Promise.resolve([]),
+      ]);
+
+    const orders = [...(activeOrders ?? []), ...(completedOrders ?? [])];
 
     return orders.map((order) => ({
       ...order,
