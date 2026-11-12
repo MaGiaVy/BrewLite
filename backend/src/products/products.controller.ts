@@ -14,8 +14,6 @@ import {
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { Role } from '@prisma/client';
-import * as crypto from 'node:crypto';
-import { getJwtSecret } from '../auth/jwt-secret.helper.js';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import { Roles } from '../auth/roles.decorator.js';
 import { RolesGuard } from '../auth/roles.guard.js';
@@ -39,46 +37,7 @@ export class OptionalJwtAuthGuard extends AuthGuard('jwt') {
 export function extractUserFromRequest(
   req?: any,
 ): { role?: Role; [key: string]: any } | null {
-  if (!req) return null;
-  if (req.user) {
-    return req.user;
-  }
-  const authHeader = req.headers?.authorization || req.headers?.Authorization;
-  if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
-    const token = authHeader.slice(7).trim();
-    try {
-      const parts = token.split('.');
-      if (parts.length === 3) {
-        const secret = getJwtSecret();
-        const expectedSignature = crypto
-          .createHmac('sha256', secret)
-          .update(`${parts[0]}.${parts[1]}`)
-          .digest('base64url');
-        if (expectedSignature === parts[2]) {
-          const payloadJson = Buffer.from(parts[1], 'base64url').toString('utf8');
-          const payload = JSON.parse(payloadJson);
-
-          // Bảo mật AUTH-EXP: Kiểm tra thời hạn hiệu lực của token (exp & nbf)
-          const nowInSeconds = Math.floor(Date.now() / 1000);
-          if (payload.exp && typeof payload.exp === 'number' && nowInSeconds > payload.exp) {
-            return null; // Token đã hết hạn, từ chối cấp quyền
-          }
-          if (payload.nbf && typeof payload.nbf === 'number' && nowInSeconds < payload.nbf) {
-            return null; // Token chưa đến thời điểm hiệu lực
-          }
-
-          return {
-            userId: payload.sub,
-            email: payload.email,
-            role: payload.role ?? Role.CUSTOMER,
-          };
-        }
-      }
-    } catch {
-      // ignore
-    }
-  }
-  return null;
+  return req?.user ?? null;
 }
 
 @Controller('products')

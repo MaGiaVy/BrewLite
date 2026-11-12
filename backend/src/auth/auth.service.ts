@@ -314,6 +314,12 @@ export class AuthService {
           throw new BadRequestException('Mã voucher đổi thưởng không hợp lệ');
         }
 
+        if (!catalogEntry && dbVoucher && dbVoucher.isActive === false) {
+          throw new BadRequestException(
+            'Mã voucher đổi thưởng hiện đang tạm ngưng áp dụng',
+          );
+        }
+
         const requiredPoints = catalogEntry
           ? catalogEntry.requiredPoints
           : Math.max(1, Math.round(dbVoucher.discountPercent) || 10);

@@ -1,6 +1,7 @@
 import {
   Injectable,
   BadRequestException,
+  ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -8,6 +9,8 @@ import { CreateStaffDto } from './dto/create-staff.dto.js';
 import { UpdateStaffDto } from './dto/update-staff.dto.js';
 import { Role } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+
+const ROOT_ADMIN_EMAIL = 'admin@brewlite.vn';
 
 @Injectable()
 export class UsersService {
@@ -59,7 +62,7 @@ export class UsersService {
 
   async createStaff(
     dto: CreateStaffDto,
-    creator?: { userId?: number; email?: string; role?: Role } | string | number,
+    _creator?: { userId?: number; email?: string; role?: Role } | string | number,
   ) {
     const existing = await this.prisma.user.findUnique({
       where: { email: dto.email.toLowerCase().trim() },
@@ -71,32 +74,9 @@ export class UsersService {
     const requestedRole = dto.role || Role.STAFF;
 
     if (requestedRole !== Role.STAFF) {
-      let creatorEmail: string | undefined;
-
-      if (typeof creator === 'string') {
-        creatorEmail = creator;
-      } else if (creator && typeof creator === 'object') {
-        creatorEmail = creator.email;
-        if (!creatorEmail && creator.userId) {
-          const creatorUser = await this.prisma.user.findUnique({
-            where: { id: creator.userId },
-            select: { email: true },
-          });
-          creatorEmail = creatorUser?.email;
-        }
-      } else if (typeof creator === 'number') {
-        const creatorUser = await this.prisma.user.findUnique({
-          where: { id: creator },
-          select: { email: true },
-        });
-        creatorEmail = creatorUser?.email;
-      }
-
-      if (creatorEmail !== 'admin@brewlite.vn') {
-        throw new BadRequestException(
-          'Chỉ Quản trị viên Tối cao (Root Admin) mới có quyền tạo tài khoản Quản trị viên (Admin)',
-        );
-      }
+      throw new BadRequestException(
+        'Hệ thống chỉ duy trì 1 tài khoản Quản trị viên duy nhất (admin@brewlite.vn). Nhân viên tạo mới bắt buộc có vai trò STAFF.',
+      );
     }
 
     const hashedPassword = await bcrypt.hash(dto.password, 10);
@@ -142,15 +122,18 @@ export class UsersService {
       throw new NotFoundException(`Không tìm thấy nhân viên với ID ${id}`);
     }
 
-    // Chặn đổi email của Root Admin
-    if (
-      user.email === 'admin@brewlite.vn' &&
-      dto.email &&
-      dto.email.toLowerCase().trim() !== user.email
-    ) {
-      throw new BadRequestException(
-        'Không thể thay đổi địa chỉ email của Quản trị viên Tối cao (Root Admin).',
-      );
+    // Chỉ chính Root Admin mới được chỉnh sửa thông tin tài khoản Root Admin
+    if (user.email === ROOT_ADMIN_EMAIL) {
+      if (currentAdminId !== user.id) {
+        throw new ForbiddenException(
+          'Chỉ chính Quản trị viên Tối cao (admin@brewlite.vn) mới được chỉnh sửa thông tin tài khoản Admin.',
+        );
+      }
+      if (dto.email && dto.email.toLowerCase().trim() !== user.email) {
+        throw new BadRequestException(
+          'Không thể thay đổi địa chỉ email của Quản trị viên Tối cao (Root Admin).',
+        );
+      }
     }
 
     // Chặn Admin tự hạ quyền của chính mình
@@ -165,60 +148,25 @@ export class UsersService {
       );
     }
 
-    if (user.email === 'admin@brewlite.vn') {
+    // Không cho phép vô hiệu hóa hoặc hạ quyền bất kỳ tài khoản Admin nào
+    if (user.email === ROOT_ADMIN_EMAIL || user.role === Role.ADMIN) {
       if (dto.isActive === false) {
         throw new BadRequestException(
-          'Tài khoản Quản trị viên Tối cao (Root Admin) không thể bị xóa hoặc vô hiệu hóa',
+          'Tài khoản Quản trị viên (Admin) không thể bị xóa hoặc vô hiệu hóa',
         );
       }
       if (dto.role && dto.role !== Role.ADMIN) {
         throw new BadRequestException(
-          'Không thể thay đổi vai trò của Quản trị viên Tối cao (Root Admin)',
+          'Không thể thay đổi vai trò của tài khoản Quản trị viên (Admin)',
         );
       }
     }
 
-    // Chặn hạ quyền nếu hệ thống chỉ còn 1 Admin duy nhất hoạt động
-    if (user.role === Role.ADMIN && dto.role && dto.role !== Role.ADMIN) {
-      const activeAdminCount = await this.prisma.user.count({
-        where: { role: Role.ADMIN, isActive: true },
-      });
-      if (activeAdminCount <= 1) {
-        throw new BadRequestException(
-          'Không thể hạ quyền Quản trị viên duy nhất còn lại trong hệ thống.',
-        );
-      }
-    }
-
-    if (user.role === Role.ADMIN && dto.isActive === false) {
-      const activeAdminCount = await this.prisma.user.count({
-        where: {
-          role: Role.ADMIN,
-          isActive: true,
-        },
-      });
-      if (activeAdminCount <= 1) {
-        throw new BadRequestException(
-          'Không thể vô hiệu hóa Admin duy nhất còn hoạt động trong hệ thống',
-        );
-      }
-    }
-
-    // Bảo mật AUTH-03: Chỉ Root Admin mới có quyền thăng cấp tài khoản lên ADMIN
+    // Chính sách Single Root Admin: không cho phép thăng cấp bất kỳ tài khoản nào lên ADMIN
     if (dto.role === Role.ADMIN && user.role !== Role.ADMIN) {
-      let currentAdminEmail: string | undefined;
-      if (currentAdminId) {
-        const adminUser = await this.prisma.user.findUnique({
-          where: { id: currentAdminId },
-          select: { email: true },
-        });
-        currentAdminEmail = adminUser?.email;
-      }
-      if (currentAdminEmail !== 'admin@brewlite.vn') {
-        throw new BadRequestException(
-          'Chỉ Quản trị viên Tối cao (Root Admin) mới có quyền thăng cấp tài khoản lên Quản trị viên (Admin)',
-        );
-      }
+      throw new BadRequestException(
+        'Hệ thống chỉ duy trì 1 tài khoản Quản trị viên duy nhất (admin@brewlite.vn). Không thể nâng cấp tài khoản khác lên vai trò Admin.',
+      );
     }
 
     if (dto.email && dto.email.toLowerCase().trim() !== user.email) {
@@ -279,24 +227,10 @@ export class UsersService {
       throw new NotFoundException(`Không tìm thấy nhân viên với ID ${id}`);
     }
 
-    if (user.email === 'admin@brewlite.vn') {
+    if (user.email === ROOT_ADMIN_EMAIL || user.role === Role.ADMIN) {
       throw new BadRequestException(
-        'Tài khoản Quản trị viên Tối cao (Root Admin) không thể bị xóa hoặc vô hiệu hóa',
+        'Tài khoản Quản trị viên (Admin) không thể bị xóa hoặc vô hiệu hóa',
       );
-    }
-
-    if (user.role === Role.ADMIN && isActive === false) {
-      const activeAdminCount = await this.prisma.user.count({
-        where: {
-          role: Role.ADMIN,
-          isActive: true,
-        },
-      });
-      if (activeAdminCount <= 1) {
-        throw new BadRequestException(
-          'Không thể vô hiệu hóa Admin duy nhất còn hoạt động trong hệ thống',
-        );
-      }
     }
 
     return this.prisma.user.update({
@@ -323,24 +257,10 @@ export class UsersService {
       throw new NotFoundException(`Không tìm thấy nhân viên với ID ${id}`);
     }
 
-    if (user.email === 'admin@brewlite.vn') {
+    if (user.email === ROOT_ADMIN_EMAIL || user.role === Role.ADMIN) {
       throw new BadRequestException(
-        'Tài khoản Quản trị viên Tối cao (Root Admin) không thể bị xóa hoặc vô hiệu hóa',
+        'Tài khoản Quản trị viên (Admin) không thể bị xóa hoặc vô hiệu hóa',
       );
-    }
-
-    if (user.role === Role.ADMIN) {
-      const activeAdminCount = await this.prisma.user.count({
-        where: {
-          role: Role.ADMIN,
-          isActive: true,
-        },
-      });
-      if (activeAdminCount <= 1) {
-        throw new BadRequestException(
-          'Không thể xóa Admin duy nhất còn hoạt động trong hệ thống',
-        );
-      }
     }
 
     try {

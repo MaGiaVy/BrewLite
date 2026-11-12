@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { Role } from '@prisma/client';
 import { UsersService } from './users.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -112,15 +116,8 @@ describe('UsersService — Staff & Admin User Management', () => {
       );
     });
 
-    it('cho phép Root Admin (admin@brewlite.vn) tạo tài khoản có quyền ADMIN', async () => {
+    it('ném BadRequestException khi tạo tài khoản có role ADMIN kể cả khi người tạo là Root Admin (admin@brewlite.vn)', async () => {
       prisma.user.findUnique.mockResolvedValue(null);
-      prisma.user.create.mockImplementation(({ data }) =>
-        Promise.resolve({
-          id: 4,
-          email: data.email,
-          role: data.role,
-        }),
-      );
 
       const dto = {
         email: 'subadmin@brewlite.vn',
@@ -129,9 +126,10 @@ describe('UsersService — Staff & Admin User Management', () => {
         role: Role.ADMIN,
       };
 
-      const result = await service.createStaff(dto, { email: 'admin@brewlite.vn' });
-      expect(result.role).toBe(Role.ADMIN);
-      expect(prisma.user.create).toHaveBeenCalled();
+      await expect(
+        service.createStaff(dto, { email: 'admin@brewlite.vn' }),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.user.create).not.toHaveBeenCalled();
     });
 
     it('ném BadRequestException nếu người tạo không phải Root Admin khi tạo tài khoản ADMIN', async () => {
@@ -195,7 +193,7 @@ describe('UsersService — Staff & Admin User Management', () => {
       expect(prisma.user.update).not.toHaveBeenCalled();
     });
 
-    it('cho phép cập nhật thông tin Root Admin nếu không đổi email hoặc giữ nguyên email', async () => {
+    it('cho phép chính Root Admin (id === currentAdminId) cập nhật fullName, phone, position, password của mình', async () => {
       prisma.user.findUnique.mockResolvedValue({
         id: 1,
         email: 'admin@brewlite.vn',
@@ -206,23 +204,92 @@ describe('UsersService — Staff & Admin User Management', () => {
         id: 1,
         email: 'admin@brewlite.vn',
         fullName: 'Root Admin Cập Nhật',
+        phone: '0901234567',
+        position: 'Chủ quán',
         role: Role.ADMIN,
         isActive: true,
       });
 
       const result = await service.updateStaff(
         1,
-        { fullName: 'Root Admin Cập Nhật', email: 'admin@brewlite.vn' },
+        {
+          fullName: 'Root Admin Cập Nhật',
+          phone: '0901234567',
+          position: 'Chủ quán',
+          password: 'newSecretPassword123',
+          email: 'admin@brewlite.vn',
+        },
         1,
       );
       expect(result.fullName).toBe('Root Admin Cập Nhật');
-      expect(prisma.user.update).toHaveBeenCalled();
+      expect(result.phone).toBe('0901234567');
+      expect(result.position).toBe('Chủ quán');
+      expect(prisma.user.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 1 },
+          data: expect.objectContaining({
+            fullName: 'Root Admin Cập Nhật',
+            phone: '0901234567',
+            position: 'Chủ quán',
+            passwordHash: expect.any(String),
+          }),
+        }),
+      );
+    });
+
+    it('ném ForbiddenException nếu người gọi khác Root Admin (currentAdminId !== rootAdmin.id hoặc undefined) cố sửa thông tin Root Admin', async () => {
+      prisma.user.findUnique.mockResolvedValue({
+        id: 1,
+        email: 'admin@brewlite.vn',
+        role: Role.ADMIN,
+        isActive: true,
+      });
+
+      for (const payload of [
+        { fullName: 'Bị sửa tên' },
+        { phone: '0999999999' },
+        { position: 'Bị sửa chức vụ' },
+        { password: 'hackedPassword123' },
+      ]) {
+        await expect(service.updateStaff(1, payload, 2)).rejects.toThrow(
+          ForbiddenException,
+        );
+        await expect(service.updateStaff(1, payload, undefined)).rejects.toThrow(
+          ForbiddenException,
+        );
+      }
+
+      expect(prisma.user.update).not.toHaveBeenCalled();
+    });
+
+    it('ném BadRequestException nếu cố thăng cấp bất kỳ nhân viên nào lên Role.ADMIN kể cả khi người gọi là Root Admin', async () => {
+      prisma.user.findUnique.mockImplementation(({ where }: any) => {
+        if (where.id === 1) {
+          return Promise.resolve({
+            id: 1,
+            email: 'admin@brewlite.vn',
+            role: Role.ADMIN,
+            isActive: true,
+          });
+        }
+        return Promise.resolve({
+          id: 10,
+          email: 'staff10@brewlite.vn',
+          role: Role.STAFF,
+          isActive: true,
+        });
+      });
+
+      await expect(
+        service.updateStaff(10, { role: Role.ADMIN }, 1),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.user.update).not.toHaveBeenCalled();
     });
 
     it('ném BadRequestException nếu Admin tự hạ quyền của chính mình (id === currentAdminId && dto.role !== Role.ADMIN)', async () => {
       prisma.user.findUnique.mockResolvedValue({
         id: 2,
-        email: 'subadmin@brewlite.vn',
+        email: 'legacyadmin@brewlite.vn',
         role: Role.ADMIN,
         isActive: true,
       });
@@ -233,44 +300,34 @@ describe('UsersService — Staff & Admin User Management', () => {
       expect(prisma.user.update).not.toHaveBeenCalled();
     });
 
-    it('ném BadRequestException nếu hạ quyền Admin khi hệ thống chỉ còn 1 Admin duy nhất hoạt động', async () => {
+    it('ném BadRequestException nếu hạ quyền bất kỳ tài khoản Role.ADMIN nào (bất kể activeAdminCount)', async () => {
       prisma.user.findUnique.mockResolvedValue({
         id: 2,
-        email: 'subadmin@brewlite.vn',
-        role: Role.ADMIN,
-        isActive: true,
-      });
-      prisma.user.count.mockResolvedValue(1);
-
-      await expect(
-        service.updateStaff(2, { role: Role.STAFF }, 1),
-      ).rejects.toThrow('Không thể hạ quyền Quản trị viên duy nhất còn lại trong hệ thống.');
-      expect(prisma.user.update).not.toHaveBeenCalled();
-    });
-
-    it('cho phép hạ quyền Admin nếu hệ thống còn nhiều hơn 1 Admin hoạt động và người thực hiện khác người bị hạ', async () => {
-      prisma.user.findUnique.mockResolvedValue({
-        id: 2,
-        email: 'subadmin@brewlite.vn',
+        email: 'legacyadmin@brewlite.vn',
         role: Role.ADMIN,
         isActive: true,
       });
       prisma.user.count.mockResolvedValue(2);
-      prisma.user.update.mockResolvedValue({
+
+      await expect(
+        service.updateStaff(2, { role: Role.STAFF }, 1),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.user.update).not.toHaveBeenCalled();
+    });
+
+    it('ném BadRequestException nếu vô hiệu hóa (isActive: false) bất kỳ tài khoản Role.ADMIN nào (bất kể activeAdminCount)', async () => {
+      prisma.user.findUnique.mockResolvedValue({
         id: 2,
-        email: 'subadmin@brewlite.vn',
-        role: Role.STAFF,
+        email: 'legacyadmin@brewlite.vn',
+        role: Role.ADMIN,
         isActive: true,
       });
+      prisma.user.count.mockResolvedValue(2);
 
-      const result = await service.updateStaff(2, { role: Role.STAFF }, 1);
-      expect(result.role).toBe(Role.STAFF);
-      expect(prisma.user.update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { id: 2 },
-          data: expect.objectContaining({ role: Role.STAFF }),
-        }),
-      );
+      await expect(
+        service.updateStaff(2, { isActive: false }, 1),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.user.update).not.toHaveBeenCalled();
     });
 
     it('cập nhật thông tin staff bình thường thành công', async () => {
@@ -328,42 +385,19 @@ describe('UsersService — Staff & Admin User Management', () => {
       expect(prisma.user.update).not.toHaveBeenCalled();
     });
 
-    it('ném BadRequestException nếu cố khóa Admin duy nhất còn hoạt động (activeAdminCount <= 1)', async () => {
+    it('ném BadRequestException nếu cố khóa bất kỳ tài khoản Role.ADMIN nào (bất kể activeAdminCount)', async () => {
       prisma.user.findUnique.mockResolvedValue({
         id: 2,
-        email: 'lastadmin@brewlite.vn',
-        role: Role.ADMIN,
-        isActive: true,
-      });
-      prisma.user.count.mockResolvedValue(1);
-
-      await expect(service.toggleStaffStatus(2, false, 3)).rejects.toThrow(
-        BadRequestException,
-      );
-      expect(prisma.user.update).not.toHaveBeenCalled();
-    });
-
-    it('khóa tài khoản Admin thành công nếu vẫn còn Admin khác đang hoạt động', async () => {
-      prisma.user.findUnique.mockResolvedValue({
-        id: 2,
-        email: 'secondadmin@brewlite.vn',
+        email: 'legacyadmin@brewlite.vn',
         role: Role.ADMIN,
         isActive: true,
       });
       prisma.user.count.mockResolvedValue(2);
-      prisma.user.update.mockResolvedValue({
-        id: 2,
-        email: 'secondadmin@brewlite.vn',
-        isActive: false,
-      });
 
-      const result = await service.toggleStaffStatus(2, false, 1);
-      expect(result.isActive).toBe(false);
-      expect(prisma.user.update).toHaveBeenCalledWith({
-        where: { id: 2 },
-        data: { isActive: false },
-        select: expect.any(Object),
-      });
+      await expect(service.toggleStaffStatus(2, false, 1)).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(prisma.user.update).not.toHaveBeenCalled();
     });
 
     it('khóa và mở khóa tài khoản STAFF bình thường', async () => {
@@ -414,15 +448,15 @@ describe('UsersService — Staff & Admin User Management', () => {
       expect(prisma.user.delete).not.toHaveBeenCalled();
     });
 
-    it('ném BadRequestException nếu cố xóa Admin duy nhất còn hoạt động trong hệ thống', async () => {
+    it('ném BadRequestException nếu cố xóa bất kỳ tài khoản Role.ADMIN nào (bất kể activeAdminCount)', async () => {
       prisma.user.findUnique.mockResolvedValue({
         id: 2,
-        email: 'subadmin@brewlite.vn',
+        email: 'legacyadmin@brewlite.vn',
         role: Role.ADMIN,
       });
-      prisma.user.count.mockResolvedValue(1);
+      prisma.user.count.mockResolvedValue(2);
 
-      await expect(service.deleteStaff(2, 3)).rejects.toThrow(
+      await expect(service.deleteStaff(2, 1)).rejects.toThrow(
         BadRequestException,
       );
       expect(prisma.user.delete).not.toHaveBeenCalled();

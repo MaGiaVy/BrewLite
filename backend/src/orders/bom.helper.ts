@@ -113,7 +113,6 @@ export async function computeRequiredIngredients(
     const prod = productMap.get(item.productId);
     const isBakery =
       prod?.category === 'bakery' ||
-      normalizedSize === 'ALL' ||
       matchedRecipes.some(
         (r: any) =>
           r.ingredient?.code?.startsWith('ING_PAIN') ||

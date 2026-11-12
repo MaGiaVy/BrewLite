@@ -60,23 +60,6 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
   private computeRequiredIngredients = computeRequiredIngredients;
 
   async createOrder(dto: CreateOrderDto, userId: number) {
-    // 0. Chống Spam đơn hàng ảo (Cart Hoarding DoS): Giới hạn tối đa 5 đơn PENDING / PAYMENT_FAILED đồng thời cho mỗi user
-    if (userId && this.prisma.order?.count) {
-      const activePendingCount = await this.prisma.order
-        .count({
-          where: {
-            userId,
-            status: { in: [OrderStatus.PENDING, OrderStatus.PAYMENT_FAILED] },
-          },
-        })
-        .catch(() => 0);
-      if (activePendingCount >= 5) {
-        throw new BadRequestException(
-          'Bạn đang có 5 đơn hàng chờ thanh toán. Vui lòng hoàn tất thanh toán hoặc hủy đơn cũ trước khi đặt đơn mới.',
-        );
-      }
-    }
-
     // 1. Tính rawSubtotal và serverUnitPrice hoàn toàn từ DB
     const productIds = [...new Set(dto.items.map((i) => i.productId))];
 
@@ -117,6 +100,11 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
 
       // Bánh ngọt không tính phụ thu size; đồ uống ưu tiên giá riêng trên món rồi mới fallback giá chuẩn StoreSetting
       const normalizedSize = (item.size || 'M').toUpperCase();
+      if (matchedProduct.category !== 'bakery' && normalizedSize === 'ALL') {
+        throw new BadRequestException(
+          `Sản phẩm "${matchedProduct.name}" là đồ uống, bắt buộc chọn kích cỡ S, M hoặc L.`,
+        );
+      }
       const sizeUpcharge =
         matchedProduct.category === 'bakery'
           ? 0
@@ -152,6 +140,25 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
 
     // 2. Transaction: Kiểm tra tồn kho, trừ tồn kho Optimistic Locking, kiểm tra & giữ Voucher, tạo đơn PENDING
     const order = await this.prisma.$transaction(async (tx: any) => {
+      if (userId && typeof tx.$queryRaw === 'function') {
+        await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${userId} FOR UPDATE`;
+      }
+
+      // Chống Spam đơn hàng ảo (Cart Hoarding DoS): Giới hạn tối đa 5 đơn PENDING / PAYMENT_FAILED đồng thời cho mỗi user
+      if (userId && tx.order?.count) {
+        const activePendingCount = await tx.order.count({
+          where: {
+            userId,
+            status: { in: [OrderStatus.PENDING, OrderStatus.PAYMENT_FAILED] },
+          },
+        });
+        if (activePendingCount >= 5) {
+          throw new BadRequestException(
+            'Bạn đang có 5 đơn hàng chờ thanh toán. Vui lòng hoàn tất thanh toán hoặc hủy đơn cũ trước khi đặt đơn mới.',
+          );
+        }
+      }
+
       // 2.1 Xử lý mã giảm giá bên trong Transaction (Chống Race Condition & Fallback hardcode - Task 2.1 [CRITICAL-02, CRITICAL-03])
       let discountAmount = 0;
       let appliedDiscountCode: string | null = null;
@@ -214,29 +221,37 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
           const maxCap = personalVoucher.maxDiscountAmount
             ? Number(personalVoucher.maxDiscountAmount)
             : Infinity;
-          discountAmount = Math.min(rawDiscount, maxCap);
+          discountAmount = Math.min(rawDiscount, maxCap, rawSubtotal);
           appliedDiscountCode = code;
 
-          // Khóa / trừ tạm 1 vé voucher cá nhân ngay bên trong transaction
-          const voucherUpdateModel = tx.userVoucher?.update
-            ? tx.userVoucher
-            : (this.prisma as any).userVoucher;
-          if (personalVoucher.quantity > 1) {
-            if (voucherUpdateModel?.update) {
-              await voucherUpdateModel.update({
+          // Khóa / trừ tạm 1 vé voucher cá nhân ngay bên trong transaction bằng updateMany nguyên tử
+          const voucherModel = tx.userVoucher ?? (this.prisma as any).userVoucher;
+          if (voucherModel?.updateMany) {
+            const decRes = await voucherModel.updateMany({
+              where: { id: personalVoucher.id, quantity: { gte: 1 } },
+              data: { quantity: { decrement: 1 } },
+            });
+            if ((decRes?.count ?? 0) === 0) {
+              throw new BadRequestException(
+                `Bạn đã sử dụng hết mã giảm giá cá nhân "${code}".`,
+              );
+            }
+            if (typeof voucherModel.deleteMany === 'function') {
+              await voucherModel.deleteMany({
+                where: { id: personalVoucher.id, quantity: { lte: 0 } },
+              });
+            }
+          } else if (personalVoucher.quantity > 1) {
+            if (voucherModel?.update) {
+              await voucherModel.update({
                 where: { id: personalVoucher.id },
                 data: { quantity: { decrement: 1 } },
               });
             }
-          } else {
-            const voucherDeleteModel = tx.userVoucher?.delete
-              ? tx.userVoucher
-              : (this.prisma as any).userVoucher;
-            if (voucherDeleteModel?.delete) {
-              await voucherDeleteModel.delete({
-                where: { id: personalVoucher.id },
-              });
-            }
+          } else if (voucherModel?.delete) {
+            await voucherModel.delete({
+              where: { id: personalVoucher.id },
+            });
           }
           voucherDeducted = true;
         } else {
@@ -267,7 +282,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
             const maxCap = dbVoucher.maxDiscountAmount
               ? Number(dbVoucher.maxDiscountAmount)
               : Infinity;
-            discountAmount = Math.min(rawDiscount, maxCap);
+            discountAmount = Math.min(rawDiscount, maxCap, rawSubtotal);
             appliedDiscountCode = code;
 
             if (tx.discountCode?.update) {

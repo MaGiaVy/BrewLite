@@ -32,6 +32,12 @@ export class PaymentsController {
     }
   }
 
+  private assertSandboxConfirmAllowed(message: string): void {
+    if (process.env.ALLOW_SANDBOX_CONFIRM !== 'true') {
+      throw new ForbiddenException(message);
+    }
+  }
+
   /**
    * POST /payments — Thanh toán đơn hàng không tiền mặt (Mock Gateway / Kịch bản Demo)
    * Yêu cầu JWT Bearer Token, kiểm tra quyền sở hữu đơn hàng
@@ -115,9 +121,8 @@ export class PaymentsController {
     @Body('orderId', new ParseIntPipe({ optional: true })) orderId?: number | string,
     @Body('appTransId') appTransId?: string,
   ) {
-    // Bảo mật PAY-01: Chặn bypass Sandbox confirm trên môi trường Production
-    this.assertSandboxAllowed(
-      'ALLOW_SANDBOX_CONFIRM',
+    // Bảo mật PAY-01: Default-deny Sandbox confirm trừ khi ALLOW_SANDBOX_CONFIRM === 'true'
+    this.assertSandboxConfirmAllowed(
       'Xác nhận thanh toán Sandbox bị vô hiệu hóa trên môi trường Production. Vui lòng sử dụng Webhook chính thức từ ZaloPay.',
     );
     const targetOrderId =
@@ -144,9 +149,8 @@ export class PaymentsController {
     @Request() req: AuthRequest,
     @Body('orderId', ParseIntPipe) orderId: number,
   ) {
-    // Bảo mật PAY-01 / BE-C1: Chặn Sandbox cancel trên môi trường Production
-    this.assertSandboxAllowed(
-      'ALLOW_SANDBOX_CONFIRM',
+    // Bảo mật PAY-01 / BE-C1: Default-deny Sandbox cancel trừ khi ALLOW_SANDBOX_CONFIRM === 'true'
+    this.assertSandboxConfirmAllowed(
       'Hủy thanh toán Sandbox bị vô hiệu hóa trên môi trường Production.',
     );
     return this.paymentsService.cancelZaloPaySandbox(

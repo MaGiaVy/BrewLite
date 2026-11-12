@@ -42,6 +42,7 @@ describe('InventoryService — Sprint 4 (Admin BOM Warehouse, Full CRUD & Optimi
       inventoryLog: {
         create: vi.fn(),
         findMany: vi.fn(),
+        count: vi.fn().mockResolvedValue(0),
       },
       storeSetting: {
         findMany: vi.fn(),
@@ -390,6 +391,25 @@ describe('InventoryService — Sprint 4 (Admin BOM Warehouse, Full CRUD & Optimi
       await expect(service.deleteIngredient(2)).rejects.toThrow(ConflictException);
       await expect(service.deleteIngredient(2)).rejects.toThrow(
         'Không thể xóa nguyên liệu vì đang được sử dụng trong công thức món. Vui lòng gỡ khỏi công thức trước.',
+      );
+      expect(mockPrisma.ingredient.delete).not.toHaveBeenCalled();
+    });
+
+    it('chặn xóa nguyên liệu khi đã phát sinh InventoryLog (inventoryLog.count > 0)', async () => {
+      mockPrisma.ingredient.findUnique.mockResolvedValue({
+        id: 10,
+        code: 'ING_LOGGED',
+        name: 'Sữa tươi đã nhập kho',
+      });
+      mockPrisma.recipe.count.mockResolvedValue(0);
+      mockPrisma.toppingRecipe.count.mockResolvedValue(0);
+      mockPrisma.inventoryLog.count.mockResolvedValue(3);
+
+      await expect(service.deleteIngredient(10)).rejects.toThrow(
+        ConflictException,
+      );
+      await expect(service.deleteIngredient(10)).rejects.toThrow(
+        'Không thể xóa nguyên liệu vì đã phát sinh nhật ký nhập/xuất kho.',
       );
       expect(mockPrisma.ingredient.delete).not.toHaveBeenCalled();
     });

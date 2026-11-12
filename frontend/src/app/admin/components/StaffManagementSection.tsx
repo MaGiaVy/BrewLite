@@ -583,7 +583,6 @@ export default function StaffManagementSection({
                     className="w-full px-3.5 py-2.5 rounded-xl border border-[#E6DDD5] text-xs text-[#2C1E18] focus:outline-none focus:border-[#9E5A2B]"
                   >
                     <option value="STAFF">Nhân Viên (STAFF) — Pha chế, KDS</option>
-                    <option value="ADMIN">Quản Trị Viên (ADMIN) — Toàn quyền</option>
                   </select>
                 </div>
 

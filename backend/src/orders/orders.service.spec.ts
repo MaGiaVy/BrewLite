@@ -12,6 +12,7 @@ import { OrderStatus, Role } from '@prisma/client';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { CreateOrderDto } from './dto/create-order.dto.js';
+import { computeRequiredIngredients } from './bom.helper.js';
 
 describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Optimistic Locking, RBAC)', () => {
   let service: OrdersService;
@@ -42,10 +43,13 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
     userVoucher: {
       findUnique: ReturnType<typeof vi.fn>;
       update: ReturnType<typeof vi.fn>;
+      updateMany: ReturnType<typeof vi.fn>;
       create: ReturnType<typeof vi.fn>;
       delete: ReturnType<typeof vi.fn>;
+      deleteMany: ReturnType<typeof vi.fn>;
     };
     $transaction: ReturnType<typeof vi.fn>;
+    $queryRaw?: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(async () => {
@@ -80,6 +84,7 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
           {
             id: 8,
             name: 'Bánh Pain au Chocolat',
+            category: 'bakery',
             basePrice: 39000,
             sizeUpchargeM: 0,
             sizeUpchargeL: 0,
@@ -153,8 +158,10 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
       userVoucher: {
         findUnique: vi.fn().mockResolvedValue(null),
         update: vi.fn().mockResolvedValue({}),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
         create: vi.fn().mockResolvedValue({}),
         delete: vi.fn().mockResolvedValue({}),
+        deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
       $transaction: vi.fn(async (cb) => cb(prisma)),
     };
@@ -2698,6 +2705,8 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
             minOrderAmount: 0,
             maxDiscountAmount: 15000,
           }),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+          deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
           delete: vi.fn().mockResolvedValue({}),
           update: vi.fn(),
         },
@@ -2730,7 +2739,13 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
       );
 
       expect(res.discountAmount).toBe(10000);
-      expect(mockTx.userVoucher.delete).toHaveBeenCalledWith({ where: { id: 77 } });
+      expect(mockTx.userVoucher.updateMany).toHaveBeenCalledWith({
+        where: { id: 77, quantity: { gte: 1 } },
+        data: { quantity: { decrement: 1 } },
+      });
+      expect(mockTx.userVoucher.deleteMany).toHaveBeenCalledWith({
+        where: { id: 77, quantity: { lte: 0 } },
+      });
       expect(mockTx.discountCode.update).not.toHaveBeenCalled();
       expect(mockTx.order.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -2916,6 +2931,200 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
         })),
       });
       expect((await validate(tooManyItems)).length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('Task 4 — Order Concurrency (User Row Lock, Atomic UserVoucher) & Beverage size ALL Rejection', () => {
+    it('createOrder rejects beverage (category !== "bakery") with size "ALL" and permits bakery with "ALL" or "M"', async () => {
+      prisma.product.findMany.mockResolvedValue([
+        {
+          id: 1,
+          name: 'Cà phê Muối',
+          category: 'vietnamese',
+          basePrice: 50000,
+          sizeUpchargeM: 0,
+          sizeUpchargeL: 8000,
+          isActive: true,
+        },
+        {
+          id: 8,
+          name: 'Bánh Pain au Chocolat',
+          category: 'bakery',
+          basePrice: 39000,
+          sizeUpchargeM: 0,
+          sizeUpchargeL: 0,
+          isActive: true,
+        },
+      ]);
+
+      await expect(
+        service.createOrder(
+          { items: [{ productId: 1, size: 'ALL', toppings: [], quantity: 1 }] } as any,
+          1,
+        ),
+      ).rejects.toThrow(BadRequestException);
+
+      // Mixed payload: bakery 'ALL' + beverage 'ALL' must still reject
+      await expect(
+        service.createOrder(
+          {
+            items: [
+              { productId: 8, size: 'ALL', toppings: [], quantity: 1 },
+              { productId: 1, size: 'all', toppings: [], quantity: 1 },
+            ],
+          } as any,
+          1,
+        ),
+      ).rejects.toThrow(BadRequestException);
+
+      const mockTx = {
+        recipe: { findMany: vi.fn().mockResolvedValue([]) },
+        toppingRecipe: { findMany: vi.fn().mockResolvedValue([]) },
+        ingredient: { findMany: vi.fn().mockResolvedValue([]) },
+        order: {
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn().mockImplementation(({ data }: any) =>
+            Promise.resolve({ id: 960, status: OrderStatus.PENDING, items: [], ...data }),
+          ),
+        },
+      };
+      prisma.$transaction.mockImplementationOnce(async (cb: any) => cb(mockTx));
+
+      // Mixed payload: beverage 'L' + bakery 'ALL' succeeds (97000 * 1.08 = 104760 -> 104000)
+      const mixedOk = await service.createOrder(
+        {
+          items: [
+            { productId: 1, size: 'L', toppings: [], quantity: 1 },
+            { productId: 8, size: 'ALL', toppings: [], quantity: 1 },
+          ],
+        } as any,
+        1,
+      );
+      expect(mixedOk.totalAmount).toBe(104000);
+
+      prisma.$transaction.mockImplementationOnce(async (cb: any) => cb(mockTx));
+      // Bakery with size 'M' succeeds with 0 upcharge (39000 * 1.08 = 42120 -> 42000)
+      const bakeryM = await service.createOrder(
+        {
+          items: [{ productId: 8, size: 'M', toppings: [], quantity: 1 }],
+        } as any,
+        1,
+      );
+      expect(bakeryM.totalAmount).toBe(42000);
+    });
+
+    it('computeRequiredIngredients does NOT classify a beverage as isBakery when size "ALL" is passed directly', async () => {
+      const mockTx = {
+        recipe: {
+          findMany: vi.fn().mockResolvedValue([
+            {
+              productId: 1,
+              size: 'ALL',
+              amount: 25,
+              ingredient: { id: 1, code: 'ING_ROBUSTA', name: 'Robusta', unit: 'g', isRequiredForSale: true },
+            },
+          ]),
+        },
+        toppingRecipe: { findMany: vi.fn().mockResolvedValue([]) },
+        product: { findMany: vi.fn().mockResolvedValue([{ id: 1, category: 'vietnamese' }]) },
+        ingredient: {
+          findMany: vi.fn().mockResolvedValue([
+            { id: 290, code: 'PKG_STRAW_BIO', name: 'Ống hút Bio', unit: 'ống', isRequiredForSale: false },
+            { id: 292, code: 'PKG_BAG_T', name: 'Túi chữ T', unit: 'chiếc', isRequiredForSale: false },
+            { id: 294, code: 'PKG_TISSUE', name: 'Khăn giấy', unit: 'tờ', isRequiredForSale: false },
+            { id: 295, code: 'PKG_SPOON', name: 'Muỗng', unit: 'cái', isRequiredForSale: false },
+          ]),
+        },
+      };
+
+      const reqs = await computeRequiredIngredients(mockTx, [
+        { productId: 1, size: 'ALL', toppings: [], quantity: 1 },
+      ]);
+      const codes = reqs.map((r) => r.code);
+
+      expect(codes).toContain('PKG_STRAW_BIO');
+      expect(codes).toContain('PKG_BAG_T');
+      expect(codes).toContain('PKG_TISSUE');
+      expect(codes).not.toContain('PKG_SPOON');
+    });
+
+    it('createOrder acquires per-user FOR UPDATE lock via $queryRaw before checking tx.order.count >= 5 inside $transaction', async () => {
+      const callOrder: string[] = [];
+      const mockTx = {
+        $queryRaw: vi.fn().mockImplementation(async () => {
+          callOrder.push('queryRaw');
+          return [{ id: 1 }];
+        }),
+        order: {
+          count: vi.fn().mockImplementation(async () => {
+            callOrder.push('txOrderCount');
+            return 5;
+          }),
+          create: vi.fn(),
+        },
+      };
+
+      // Pre-tx prisma.order.count should not block if inside-tx check is authoritative
+      prisma.order.count.mockResolvedValue(0);
+      prisma.$transaction.mockImplementationOnce(async (cb: any) => cb(mockTx));
+
+      await expect(
+        service.createOrder(
+          { items: [{ productId: 1, size: 'M', toppings: [], quantity: 1 }] } as any,
+          1,
+        ),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(mockTx.$queryRaw).toHaveBeenCalledTimes(1);
+      expect(mockTx.order.count).toHaveBeenCalledWith({
+        where: {
+          userId: 1,
+          status: { in: [OrderStatus.PENDING, OrderStatus.PAYMENT_FAILED] },
+        },
+      });
+      expect(callOrder).toEqual(['queryRaw', 'txOrderCount']);
+      expect(mockTx.order.create).not.toHaveBeenCalled();
+    });
+
+    it('createOrder uses atomic UserVoucher updateMany + deleteMany and throws BadRequestException when concurrent depletion returns count: 0', async () => {
+      const mockTx = {
+        $queryRaw: vi.fn().mockResolvedValue([{ id: 1 }]),
+        userVoucher: {
+          findUnique: vi.fn().mockResolvedValue({
+            id: 88,
+            userId: 1,
+            code: 'PERSONAL10',
+            quantity: 1,
+            discountPercent: 10,
+            minOrderAmount: 0,
+            maxDiscountAmount: 15000,
+          }),
+          updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+          deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+        },
+        order: {
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn(),
+        },
+      };
+      prisma.$transaction.mockImplementationOnce(async (cb: any) => cb(mockTx));
+
+      await expect(
+        service.createOrder(
+          {
+            items: [{ productId: 1, size: 'M', toppings: [], quantity: 1 }],
+            discountCode: 'PERSONAL10',
+          } as any,
+          1,
+        ),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(mockTx.userVoucher.updateMany).toHaveBeenCalledWith({
+        where: { id: 88, quantity: { gte: 1 } },
+        data: { quantity: { decrement: 1 } },
+      });
+      expect(mockTx.userVoucher.deleteMany).not.toHaveBeenCalled();
+      expect(mockTx.order.create).not.toHaveBeenCalled();
     });
   });
 });

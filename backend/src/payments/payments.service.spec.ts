@@ -555,7 +555,7 @@ describe('Task 10 — Payments, State Machine, Idempotency, Optimistic Locking &
         ).rejects.toThrow(ForbiddenException);
       });
 
-      it('processPayment: Cho phép STAFF thanh toán hộ đơn của khách hàng', async () => {
+      it('processPayment: Chặn STAFF và ADMIN thanh toán hộ đơn của khách hàng (owner-only)', async () => {
         mockPrisma.order.findUnique.mockResolvedValue({
           id: 15,
           userId: 1,
@@ -563,27 +563,25 @@ describe('Task 10 — Payments, State Machine, Idempotency, Optimistic Locking &
           status: OrderStatus.PENDING,
         });
 
-        mockPaymentService.processPayment.mockResolvedValue({
-          success: true,
-          transactionId: 'TXN-STAFF',
-          message: 'Thành công',
-        });
-        mockPrisma.order.updateMany.mockResolvedValue({ count: 1 });
-        mockPrisma.payment.create.mockResolvedValue({
-          id: 201,
-          orderId: 15,
-          amount: 50000,
-          method: PaymentMethod.EWALLET,
-          status: PaymentStatus.SUCCESS,
-        });
+        await expect(
+          service.processPayment(
+            { orderId: 15, method: PaymentMethod.EWALLET },
+            99,
+            undefined,
+            Role.STAFF,
+          ),
+        ).rejects.toThrow(ForbiddenException);
 
-        const res = await service.processPayment(
-          { orderId: 15, method: PaymentMethod.EWALLET },
-          99,
-          undefined,
-          Role.STAFF,
-        );
-        expect(res.success).toBe(true);
+        await expect(
+          service.processPayment(
+            { orderId: 15, method: PaymentMethod.EWALLET },
+            99,
+            undefined,
+            Role.ADMIN,
+          ),
+        ).rejects.toThrow(ForbiddenException);
+
+        expect(mockPaymentService.processPayment).not.toHaveBeenCalled();
       });
     });
 
@@ -878,6 +876,69 @@ describe('Task 10 — Payments, State Machine, Idempotency, Optimistic Locking &
         expect(callArgs.data.voucherDeducted).not.toBe(true);
       });
 
+      it('deductLegacyUserVoucherIfNeeded dùng updateMany nguyên tử: count=1 bật voucherDeducted + deleteMany; count=0 không bật voucherDeducted', async () => {
+        mockPrisma.order.findUnique.mockResolvedValue({
+          id: 56,
+          userId: 1,
+          totalAmount: 60000,
+          status: OrderStatus.PENDING,
+          discountCode: 'BEAN10',
+          voucherDeducted: false,
+          version: 0,
+          createdAt: new Date(),
+        });
+        mockPaymentService.processPayment.mockResolvedValue({
+          success: true,
+          transactionId: 'TXN-LEGACY-ATOMIC',
+          message: 'Thành công',
+        });
+        mockPrisma.payment.create.mockResolvedValue({
+          id: 506,
+          orderId: 56,
+          amount: 60000,
+          method: PaymentMethod.EWALLET,
+          status: PaymentStatus.SUCCESS,
+        });
+
+        // Case 1: updateMany count = 1 -> deleteMany + order.updateMany({ voucherDeducted: true })
+        mockPrisma.order.updateMany.mockResolvedValue({ count: 1 });
+        mockPrisma.userVoucher = {
+          findUnique: vi.fn().mockResolvedValue({ id: 7, userId: 1, code: 'BEAN10', quantity: 1 }),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+          deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
+        };
+
+        await service.processPayment({ orderId: 56, method: PaymentMethod.EWALLET }, 1);
+
+        expect(mockPrisma.userVoucher.updateMany).toHaveBeenCalledWith({
+          where: { id: 7, quantity: { gte: 1 } },
+          data: { quantity: { decrement: 1 } },
+        });
+        expect(mockPrisma.userVoucher.deleteMany).toHaveBeenCalledWith({
+          where: { id: 7, quantity: { lte: 0 } },
+        });
+        expect(mockPrisma.order.updateMany).toHaveBeenCalledWith({
+          where: { id: 56 },
+          data: { voucherDeducted: true },
+        });
+
+        // Case 2: updateMany count = 0 -> không deleteMany và không bật voucherDeducted
+        mockPrisma.order.updateMany.mockClear();
+        mockPrisma.order.updateMany.mockResolvedValue({ count: 1 });
+        mockPrisma.userVoucher = {
+          findUnique: vi.fn().mockResolvedValue({ id: 7, userId: 1, code: 'BEAN10', quantity: 0 }),
+          updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+          deleteMany: vi.fn(),
+        };
+
+        await service.processPayment({ orderId: 56, method: PaymentMethod.EWALLET }, 1);
+
+        expect(mockPrisma.userVoucher.deleteMany).not.toHaveBeenCalled();
+        expect(mockPrisma.order.updateMany).not.toHaveBeenCalledWith(
+          expect.objectContaining({ data: { voucherDeducted: true } }),
+        );
+      });
+
       it('simulateFailure=true lọc theo status trong CAS failResult và ném ConflictException nếu đơn đã bị hủy song song', async () => {
         mockPrisma.order.findUnique.mockResolvedValue({
           id: 55,
@@ -977,7 +1038,7 @@ describe('Task 10 — Payments, State Machine, Idempotency, Optimistic Locking &
         ).rejects.toThrow(ForbiddenException);
       });
 
-      it('không gọi user.update nếu đơn hàng không có userId (khách vãng lai, STAFF thu hộ)', async () => {
+      it('BE-C3: chặn cả CUSTOMER, STAFF và ADMIN thanh toán đơn khách vãng lai (userId: null)', async () => {
         mockPrisma.order.findUnique.mockResolvedValue({
           id: 9,
           userId: null, // Khách không login
@@ -986,29 +1047,25 @@ describe('Task 10 — Payments, State Machine, Idempotency, Optimistic Locking &
           version: 0,
         });
 
-        mockPaymentService.processPayment.mockResolvedValue({
-          success: true,
-          transactionId: 'TXN-ANONYMOUS',
-          message: 'Thành công',
-        });
+        await expect(
+          service.processPayment(
+            { orderId: 9, method: PaymentMethod.EWALLET },
+            99,
+            undefined,
+            Role.STAFF,
+          ),
+        ).rejects.toThrow(ForbiddenException);
 
-        mockPrisma.order.updateMany.mockResolvedValue({ count: 1 });
-        mockPrisma.payment.create.mockResolvedValue({
-          id: 103,
-          orderId: 9,
-          amount: 50000,
-          method: PaymentMethod.EWALLET,
-          status: PaymentStatus.SUCCESS,
-        });
+        await expect(
+          service.processPayment(
+            { orderId: 9, method: PaymentMethod.EWALLET },
+            99,
+            undefined,
+            Role.ADMIN,
+          ),
+        ).rejects.toThrow(ForbiddenException);
 
-        const result = await service.processPayment(
-          { orderId: 9, method: PaymentMethod.EWALLET },
-          99,
-          undefined,
-          Role.STAFF,
-        );
-
-        expect(result.success).toBe(true);
+        expect(mockPaymentService.processPayment).not.toHaveBeenCalled();
         expect(mockPrisma.user.update).not.toHaveBeenCalled();
       });
 
@@ -1089,7 +1146,7 @@ describe('Task 10 — Payments, State Machine, Idempotency, Optimistic Locking &
           expect(mockZaloPayService.createOrder).not.toHaveBeenCalled();
         });
 
-        it('cho phép STAFF tạo order cho đơn của người khác', async () => {
+        it('chặn STAFF và ADMIN tạo order ZaloPay cho đơn của người khác (owner-only)', async () => {
           mockPrisma.order.findUnique.mockResolvedValue({
             id: 16,
             userId: 1,
@@ -1097,14 +1154,16 @@ describe('Task 10 — Payments, State Machine, Idempotency, Optimistic Locking &
             status: OrderStatus.PENDING,
             createdAt: new Date(),
           });
-          mockZaloPayService.createOrder.mockResolvedValue({
-            returnCode: 1,
-            orderUrl: 'https://zalopay.vn/pay',
-            appTransId: 'trans_123',
-          });
 
-          const res = await service.createZaloPayOrder(16, 99, Role.STAFF);
-          expect(res.returnCode).toBe(1);
+          await expect(
+            service.createZaloPayOrder(16, 99, Role.STAFF),
+          ).rejects.toThrow(ForbiddenException);
+
+          await expect(
+            service.createZaloPayOrder(16, 99, Role.ADMIN),
+          ).rejects.toThrow(ForbiddenException);
+
+          expect(mockZaloPayService.createOrder).not.toHaveBeenCalled();
         });
 
         it('Task 5: cho phép retry createZaloPayOrder từ PAYMENT_FAILED (trong 5 phút) bằng CAS PAYMENT_FAILED -> PENDING', async () => {
@@ -1207,7 +1266,7 @@ describe('Task 10 — Payments, State Machine, Idempotency, Optimistic Locking &
           ).rejects.toThrow(ForbiddenException);
         });
 
-        it('cho phép ADMIN xác nhận đơn hàng dù không phải chủ đơn', async () => {
+        it('chặn ADMIN và STAFF xác nhận đơn hàng của người khác (owner-only)', async () => {
           mockPrisma.order.findUnique.mockResolvedValue({
             id: 20,
             userId: 1,
@@ -1215,22 +1274,16 @@ describe('Task 10 — Payments, State Machine, Idempotency, Optimistic Locking &
             status: OrderStatus.PENDING,
           });
 
-          mockZaloPayService.createMockCallbackPayload.mockReturnValue({
-            data: JSON.stringify({
-              app_trans_id: '261024_20_123',
-              amount: 50000,
-              zp_trans_id: 12345,
-              embed_data: JSON.stringify({ orderId: 20 }),
-            }),
-            mac: 'valid_mac',
-          });
-          mockZaloPayService.verifyCallback.mockReturnValue(true);
+          await expect(
+            service.confirmZaloPaySandbox(20, 99, Role.ADMIN, '261024_20_123'),
+          ).rejects.toThrow(ForbiddenException);
 
-          const result = await service.confirmZaloPaySandbox(20, 99, Role.ADMIN, '261024_20_123');
-          expect(result.success).toBe(true);
+          await expect(
+            service.confirmZaloPaySandbox(20, 99, Role.STAFF, '261024_20_123'),
+          ).rejects.toThrow(ForbiddenException);
         });
 
-        it('BE-C3: chặn CUSTOMER xác nhận đơn khách vãng lai (order.userId === null) và chỉ cho phép STAFF/ADMIN', async () => {
+        it('BE-C3: chặn CUSTOMER, STAFF và ADMIN xác nhận đơn khách vãng lai (order.userId === null)', async () => {
           mockPrisma.order.findUnique.mockResolvedValue({
             id: 21,
             userId: null,
@@ -1242,19 +1295,13 @@ describe('Task 10 — Payments, State Machine, Idempotency, Optimistic Locking &
             service.confirmZaloPaySandbox(21, 5, Role.CUSTOMER, '261024_21_123'),
           ).rejects.toThrow(ForbiddenException);
 
-          mockZaloPayService.createMockCallbackPayload.mockReturnValue({
-            data: JSON.stringify({
-              app_trans_id: '261024_21_123',
-              amount: 50000,
-              zp_trans_id: 12345,
-              embed_data: JSON.stringify({ orderId: 21 }),
-            }),
-            mac: 'valid_mac',
-          });
-          mockZaloPayService.verifyCallback.mockReturnValue(true);
+          await expect(
+            service.confirmZaloPaySandbox(21, 99, Role.STAFF, '261024_21_123'),
+          ).rejects.toThrow(ForbiddenException);
 
-          const result = await service.confirmZaloPaySandbox(21, 99, Role.STAFF, '261024_21_123');
-          expect(result.success).toBe(true);
+          await expect(
+            service.confirmZaloPaySandbox(21, 99, Role.ADMIN, '261024_21_123'),
+          ).rejects.toThrow(ForbiddenException);
         });
 
         it('BE-C2: ném BadRequestException khi appTransId không khớp orderId hoặc sai định dạng', async () => {
@@ -1373,19 +1420,22 @@ describe('Task 10 — Payments, State Machine, Idempotency, Optimistic Locking &
           );
         });
 
-        it('cho phép ADMIN hủy thanh toán dù không phải chủ đơn', async () => {
+        it('chặn ADMIN và STAFF hủy thanh toán đơn của người khác (owner-only)', async () => {
           mockPrisma.order.findUnique.mockResolvedValue({
             id: 20,
             userId: 1,
             status: OrderStatus.PENDING,
           });
 
-          const result = await service.cancelZaloPaySandbox(20, 99, Role.ADMIN);
-          expect(result.success).toBe(true);
-          expect(result.message).toContain('đã được hủy');
+          await expect(service.cancelZaloPaySandbox(20, 99, Role.ADMIN)).rejects.toThrow(
+            ForbiddenException,
+          );
+          await expect(service.cancelZaloPaySandbox(20, 99, Role.STAFF)).rejects.toThrow(
+            ForbiddenException,
+          );
         });
 
-        it('BE-C3: chặn CUSTOMER hủy đơn khách vãng lai (userId: null) và cho phép STAFF', async () => {
+        it('BE-C3: chặn CUSTOMER, STAFF và ADMIN hủy đơn khách vãng lai (userId: null)', async () => {
           mockPrisma.order.findUnique.mockResolvedValue({
             id: 20,
             userId: null,
@@ -1395,9 +1445,12 @@ describe('Task 10 — Payments, State Machine, Idempotency, Optimistic Locking &
           await expect(service.cancelZaloPaySandbox(20, 5, Role.CUSTOMER)).rejects.toThrow(
             ForbiddenException,
           );
-
-          const res = await service.cancelZaloPaySandbox(20, 99, Role.STAFF);
-          expect(res.success).toBe(true);
+          await expect(service.cancelZaloPaySandbox(20, 99, Role.STAFF)).rejects.toThrow(
+            ForbiddenException,
+          );
+          await expect(service.cancelZaloPaySandbox(20, 99, Role.ADMIN)).rejects.toThrow(
+            ForbiddenException,
+          );
         });
 
         it('BE-C1: chặn CUSTOMER hủy đơn đã thanh toán (PAID -> CANCELLED) với ForbiddenException', async () => {
@@ -1415,10 +1468,10 @@ describe('Task 10 — Payments, State Machine, Idempotency, Optimistic Locking &
           expect(mockPrisma.order.updateMany).not.toHaveBeenCalled();
         });
 
-        it('Task 2.5 & BE-I2: STAFF/ADMIN hủy đơn PAID -> CANCELLED hoàn kho BOM và thu hồi điểm loyalty nguyên tử bằng updateMany', async () => {
+        it('Task 2.5 & BE-I2: STAFF/ADMIN hủy chính đơn PAID của mình -> CANCELLED hoàn kho BOM và thu hồi điểm loyalty nguyên tử bằng updateMany', async () => {
           mockPrisma.order.findUnique.mockResolvedValue({
             id: 25,
-            userId: 1,
+            userId: 99,
             totalAmount: 80000,
             status: OrderStatus.PAID,
             items: [
@@ -1462,7 +1515,7 @@ describe('Task 10 — Payments, State Machine, Idempotency, Optimistic Locking &
           );
           expect(mockPrisma.user.updateMany).toHaveBeenCalledWith({
             where: {
-              id: 1,
+              id: 99,
               loyaltyPoints: { gte: 80 },
             },
             data: {
@@ -1471,10 +1524,10 @@ describe('Task 10 — Payments, State Machine, Idempotency, Optimistic Locking &
           });
         });
 
-        it('BE-I2: thu hồi điểm loyalty clamp về 0 nguyên tử khi số dư user nhỏ hơn điểm cần thu hồi', async () => {
+        it('BE-I2: thu hồi điểm loyalty clamp về 0 nguyên tử khi số dư user nhỏ hơn điểm cần thu hồi (chính chủ ADMIN)', async () => {
           mockPrisma.order.findUnique.mockResolvedValue({
             id: 28,
-            userId: 1,
+            userId: 99,
             totalAmount: 80000,
             status: OrderStatus.PAID,
             items: [],
@@ -1491,11 +1544,11 @@ describe('Task 10 — Payments, State Machine, Idempotency, Optimistic Locking &
           const result = await service.cancelZaloPaySandbox(28, 99, Role.ADMIN);
           expect(result.success).toBe(true);
           expect(mockPrisma.user.updateMany).toHaveBeenNthCalledWith(1, {
-            where: { id: 1, loyaltyPoints: { gte: 80 } },
+            where: { id: 99, loyaltyPoints: { gte: 80 } },
             data: { loyaltyPoints: { decrement: 80 } },
           });
           expect(mockPrisma.user.updateMany).toHaveBeenNthCalledWith(2, {
-            where: { id: 1, loyaltyPoints: { lt: 80, gt: 0 } },
+            where: { id: 99, loyaltyPoints: { lt: 80, gt: 0 } },
             data: { loyaltyPoints: 0 },
           });
         });

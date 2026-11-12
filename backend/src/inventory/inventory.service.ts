@@ -301,6 +301,18 @@ export class InventoryService {
       );
     }
 
+    let logsCount = 0;
+    if ((this.prisma as any).inventoryLog?.count) {
+      logsCount = await (this.prisma as any).inventoryLog.count({
+        where: { ingredientId: id },
+      });
+    }
+    if (logsCount > 0) {
+      throw new ConflictException(
+        'Không thể xóa nguyên liệu vì đã phát sinh nhật ký nhập/xuất kho.',
+      );
+    }
+
     await this.prisma.ingredient.delete({ where: { id } });
 
     return {

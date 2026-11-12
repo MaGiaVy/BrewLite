@@ -100,7 +100,7 @@ describe('ProductsController', () => {
     });
   });
 
-  describe('extractUserFromRequest — Kiểm tra thời hạn token (CRIT-03)', () => {
+  describe('extractUserFromRequest — BE-C01: Raw Authorization header fallback removal', () => {
     function createTestToken(payload: any): string {
       const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
       const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
@@ -112,33 +112,44 @@ describe('ProductsController', () => {
       return `${header}.${body}.${signature}`;
     }
 
-    it('từ chối token Admin đã hết hạn (exp trong quá khứ) và trả về null', () => {
+    it('trả về null khi req.user vắng mặt kể cả với token Admin đã hết hạn hoặc hợp lệ trong raw Authorization header', () => {
       const expiredPayload = {
         sub: 1,
         email: 'admin@brewlite.vn',
         role: Role.ADMIN,
-        exp: Math.floor(Date.now() / 1000) - 3600, // Hết hạn 1 tiếng trước
+        exp: Math.floor(Date.now() / 1000) - 3600,
       };
-      const token = createTestToken(expiredPayload);
-      const req = { headers: { authorization: `Bearer ${token}` } };
+      expect(
+        extractUserFromRequest({ headers: { authorization: `Bearer ${createTestToken(expiredPayload)}` } }),
+      ).toBeNull();
 
-      const user = extractUserFromRequest(req);
-      expect(user).toBeNull();
+      const validPayload = {
+        sub: 99,
+        email: 'locked@brewlite.vn',
+        role: Role.ADMIN,
+        exp: Math.floor(Date.now() / 1000) + 3600,
+      };
+      expect(
+        extractUserFromRequest({ headers: { authorization: `Bearer ${createTestToken(validPayload)}` } }),
+      ).toBeNull();
     });
 
-    it('chấp nhận token hợp lệ và còn hạn', () => {
+    it('GET /products?includeInactive=true và GET /products/:id buộc showAll=false, isAdmin=false khi req.user là null dù có raw ADMIN header', async () => {
       const validPayload = {
-        sub: 2,
-        email: 'staff@brewlite.vn',
-        role: Role.STAFF,
-        exp: Math.floor(Date.now() / 1000) + 3600, // Còn hạn 1 tiếng
+        sub: 99,
+        email: 'locked@brewlite.vn',
+        role: Role.ADMIN,
+        exp: Math.floor(Date.now() / 1000) + 3600,
       };
-      const token = createTestToken(validPayload);
-      const req = { headers: { authorization: `Bearer ${token}` } };
+      const req = { user: null, headers: { authorization: `Bearer ${createTestToken(validPayload)}` } };
+      mockProductsService.findAll.mockReturnValue([]);
+      mockProductsService.findOne.mockReturnValue({});
 
-      const user = extractUserFromRequest(req);
-      expect(user).not.toBeNull();
-      expect(user?.role).toBe(Role.STAFF);
+      await controller.findAll('true', req);
+      expect(mockProductsService.findAll).toHaveBeenCalledWith(false, false);
+
+      await controller.findOne(5, req);
+      expect(mockProductsService.findOne).toHaveBeenCalledWith(5, false);
     });
   });
 });
