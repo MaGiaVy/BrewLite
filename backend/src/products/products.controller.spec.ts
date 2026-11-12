@@ -174,15 +174,62 @@ describe('ProductsController', () => {
       expect(visibilityRoles).toEqual([Role.ADMIN]);
     });
 
-    it('delegates controller.toggleSoldOut(1, { isSoldOutManual: true }) to productsService.toggleSoldOut', async () => {
+    it('delegates controller.toggleSoldOut(1, { isSoldOutManual: true }) to productsService.toggleSoldOut with isAdmin based on req.user.role', async () => {
       const dto = { isSoldOutManual: true };
       const expected = { id: 1, isSoldOutManual: true };
       mockProductsService.toggleSoldOut.mockResolvedValue(expected);
 
-      const res = await controller.toggleSoldOut(1, dto);
+      const staffRes = await controller.toggleSoldOut(1, dto, {
+        user: { role: Role.STAFF },
+      });
+      expect(mockProductsService.toggleSoldOut).toHaveBeenCalledWith(1, dto, false);
+      expect(staffRes).toEqual(expected);
 
-      expect(mockProductsService.toggleSoldOut).toHaveBeenCalledWith(1, dto);
-      expect(res).toEqual(expected);
+      const adminRes = await controller.toggleSoldOut(1, dto, {
+        user: { role: Role.ADMIN },
+      });
+      expect(mockProductsService.toggleSoldOut).toHaveBeenCalledWith(1, dto, true);
+      expect(adminRes).toEqual(expected);
+    });
+
+    it('ProductsService.toggleSoldOut hides recipes and COGS for STAFF (isAdmin=false) while keeping isSoldOutManual and isOutOfStock', async () => {
+      const mockPrisma = {
+        product: {
+          findUnique: vi.fn().mockResolvedValue({ id: 1, name: 'Cà phê Đen', isActive: true }),
+          update: vi.fn().mockResolvedValue({
+            id: 1,
+            name: 'Cà phê Đen',
+            basePrice: 29000,
+            category: 'vietnamese',
+            isActive: true,
+            isSoldOutManual: true,
+            recipes: [
+              {
+                id: 1,
+                size: 'S',
+                amount: 20,
+                ingredient: { id: 10, stock: 200, costPerUnit: 200, isRequiredForSale: true },
+              },
+            ],
+          }),
+        },
+      };
+      const realService = new ProductsService(mockPrisma as any);
+
+      const staffResult: any = await realService.toggleSoldOut(1, { isSoldOutManual: true }, false);
+      expect(staffResult.isSoldOutManual).toBe(true);
+      expect(staffResult.isOutOfStock).toBe(true);
+      expect(staffResult.recipes).toBeUndefined();
+      expect(staffResult.cogsSizeS).toBeUndefined();
+      expect(staffResult.cogsSizeM).toBeUndefined();
+      expect(staffResult.cogsSizeL).toBeUndefined();
+      expect(staffResult.grossProfitS).toBeUndefined();
+      expect(staffResult.marginPercentS).toBeUndefined();
+
+      const adminResult: any = await realService.toggleSoldOut(1, { isSoldOutManual: true }, true);
+      expect(adminResult.isSoldOutManual).toBe(true);
+      expect(adminResult.recipes).toBeDefined();
+      expect(adminResult.cogsSizeS).toBe(4000);
     });
   });
 });

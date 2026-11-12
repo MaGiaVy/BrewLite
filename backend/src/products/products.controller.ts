@@ -88,8 +88,11 @@ export class ProductsController {
   toggleSoldOut(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: ToggleSoldOutDto,
+    @Request() req?: any,
   ) {
-    return this.productsService.toggleSoldOut(id, dto);
+    const user = extractUserFromRequest(req);
+    const isAdmin = user?.role === Role.ADMIN;
+    return this.productsService.toggleSoldOut(id, dto, isAdmin);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)

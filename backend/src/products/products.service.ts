@@ -326,7 +326,7 @@ export class ProductsService {
     return this.enrichProductStock(updated, undefined, true);
   }
 
-  async toggleSoldOut(id: number, dto: ToggleSoldOutDto) {
+  async toggleSoldOut(id: number, dto: ToggleSoldOutDto, isAdmin = false) {
     const existing = await this.prisma.product.findUnique({ where: { id } });
     if (!existing) {
       throw new NotFoundException(`Không tìm thấy sản phẩm #${id}`);
@@ -344,7 +344,10 @@ export class ProductsService {
       },
     });
 
-    return this.enrichProductStock(updated, undefined, true);
+    return {
+      ...this.enrichProductStock(updated, undefined, isAdmin),
+      isSoldOutManual: updated.isSoldOutManual,
+    };
   }
 
   async remove(id: number) {

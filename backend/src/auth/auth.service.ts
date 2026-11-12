@@ -282,12 +282,6 @@ export class AuthService {
       throw new NotFoundException('User không tồn tại');
     }
 
-    if (user.loyaltyPoints < points) {
-      throw new BadRequestException(
-        `Bạn không đủ Hạt Vàng (Cần ${points} Hạt Vàng, hiện có ${user.loyaltyPoints} Hạt Vàng).`,
-      );
-    }
-
     let catalogEntry: VoucherCatalogItem | undefined;
     let dbVoucher: any = null;
     let cleanCode: string | null = null;
@@ -333,6 +327,12 @@ export class AuthService {
       } else {
         throw new BadRequestException('Mã voucher đổi thưởng không hợp lệ');
       }
+    }
+
+    if (user.loyaltyPoints < effectivePointsToDeduct) {
+      throw new BadRequestException(
+        `Bạn không đủ Hạt Vàng (Bạn cần ít nhất ${effectivePointsToDeduct} Hạt Vàng, hiện có ${user.loyaltyPoints} Hạt Vàng).`,
+      );
     }
 
     return this.prisma.$transaction(async (tx) => {

@@ -319,6 +319,88 @@ describe('AuthService - Loyalty Points Redemption & Voucher Accumulation', () =>
       expect(res.message).not.toContain('Trừ 50 Hạt Vàng');
     });
 
+    it('succeeds and deducts 10 when user has loyaltyPoints=20 and client sends excess points=50 for BREW10', async () => {
+      prisma.user.findUnique.mockResolvedValue({
+        id: 1,
+        email: 'test@example.com',
+        fullName: 'Test User',
+        phone: '0901234567',
+        loyaltyPoints: 20,
+        createdAt: new Date(),
+      });
+
+      prisma.user.updateMany.mockResolvedValue({ count: 1 });
+      prisma.userVoucher.findUnique.mockResolvedValue(null);
+      prisma.userVoucher.create.mockResolvedValue({
+        id: 12,
+        userId: 1,
+        code: 'BREW10',
+        quantity: 1,
+        discountPercent: 10,
+        minOrderAmount: 0,
+        maxDiscountAmount: 15000,
+      });
+      prisma.userVoucher.findMany.mockResolvedValue([]);
+
+      const res = await service.redeemPoints(
+        1,
+        50,
+        'Đổi BREW10 khi có 20 điểm nhưng client gửi 50',
+        'BREW10',
+      );
+
+      expect(prisma.user.updateMany).toHaveBeenCalledWith({
+        where: { id: 1, loyaltyPoints: { gte: 10 } },
+        data: { loyaltyPoints: { decrement: 10 } },
+      });
+      expect(res.success).toBe(true);
+      expect(res.remainingPoints).toBe(10);
+      expect(res.message).toContain('Trừ 10 Hạt Vàng');
+    });
+
+    it('enforces server requiredPoints for BREW20 (20), BREW50 (50), and active dbVoucher discountPercent fallback', async () => {
+      prisma.user.findUnique.mockResolvedValue({
+        id: 1,
+        email: 'test@example.com',
+        fullName: 'Test User',
+        phone: '0901234567',
+        loyaltyPoints: 100,
+        createdAt: new Date(),
+      });
+      prisma.user.updateMany.mockResolvedValue({ count: 1 });
+      prisma.userVoucher.findUnique.mockResolvedValue(null);
+      prisma.userVoucher.create.mockImplementation(async ({ data }: any) => ({
+        id: 20,
+        ...data,
+      }));
+      prisma.userVoucher.findMany.mockResolvedValue([]);
+
+      await service.redeemPoints(1, 35, 'Đổi BREW20', 'BREW20');
+      expect(prisma.user.updateMany).toHaveBeenLastCalledWith({
+        where: { id: 1, loyaltyPoints: { gte: 20 } },
+        data: { loyaltyPoints: { decrement: 20 } },
+      });
+
+      await service.redeemPoints(1, 80, 'Đổi BREW50', 'BREW50');
+      expect(prisma.user.updateMany).toHaveBeenLastCalledWith({
+        where: { id: 1, loyaltyPoints: { gte: 50 } },
+        data: { loyaltyPoints: { decrement: 50 } },
+      });
+
+      prisma.discountCode.findUnique.mockResolvedValue({
+        code: 'CUSTOM25',
+        discountPercent: 25,
+        minOrderAmount: 30000,
+        maxDiscountAmount: 20000,
+        isActive: true,
+      });
+      await service.redeemPoints(1, 40, 'Đổi DB voucher', 'CUSTOM25');
+      expect(prisma.user.updateMany).toHaveBeenLastCalledWith({
+        where: { id: 1, loyaltyPoints: { gte: 25 } },
+        data: { loyaltyPoints: { decrement: 25 } },
+      });
+    });
+
     it('accumulates (cộng dồn) voucher quantity if user already owns the voucher', async () => {
       prisma.user.findUnique.mockResolvedValue({
         id: 1,
