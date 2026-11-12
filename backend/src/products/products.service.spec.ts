@@ -210,6 +210,7 @@ describe('ProductsService — Admin Menu CRUD & Visibility Management', () => {
         imageUrl: '/images/products/ca-phe-den.png',
         description: 'Cà phê đậm đà',
         isOutOfStock: false,
+        isSoldOutManual: false,
         outOfStockSizes: [],
         availableServings: 20,
         category: 'vietnamese',

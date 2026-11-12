@@ -142,6 +142,7 @@ export class ProductsService {
         imageUrl: product.imageUrl ?? null,
         description: product.description ?? null,
         isOutOfStock: manualSoldOut || ingredientOutOfStock,
+        isSoldOutManual: manualSoldOut,
         outOfStockSizes,
         availableServings: manualSoldOut ? 0 : computedServings,
         category: product.category,
