@@ -20,6 +20,7 @@ import { RolesGuard } from '../auth/roles.guard.js';
 import {
   CreateProductDto,
   ToggleProductVisibilityDto,
+  ToggleSoldOutDto,
   UpdateProductDto,
 } from './dto/product.dto.js';
 import { ProductsService } from './products.service.js';
@@ -82,13 +83,13 @@ export class ProductsController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN)
-  @Patch(':id')
-  update(
+  @Roles(Role.STAFF, Role.ADMIN)
+  @Patch(':id/sold-out')
+  toggleSoldOut(
     @Param('id', ParseIntPipe) id: number,
-    @Body() dto: UpdateProductDto,
+    @Body() dto: ToggleSoldOutDto,
   ) {
-    return this.productsService.update(id, dto);
+    return this.productsService.toggleSoldOut(id, dto);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -99,6 +100,16 @@ export class ProductsController {
     @Body() dto: ToggleProductVisibilityDto,
   ) {
     return this.productsService.toggleVisibility(id, dto);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  @Patch(':id')
+  update(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateProductDto,
+  ) {
+    return this.productsService.update(id, dto);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)

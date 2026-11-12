@@ -291,6 +291,7 @@ export class AuthService {
     let catalogEntry: VoucherCatalogItem | undefined;
     let dbVoucher: any = null;
     let cleanCode: string | null = null;
+    let effectivePointsToDeduct = points;
 
     if (voucherCode !== undefined && voucherCode !== null) {
       const rawCode =
@@ -327,6 +328,8 @@ export class AuthService {
         if (points < requiredPoints) {
           throw new BadRequestException('Số Hạt Vàng không đủ để đổi mã này');
         }
+
+        effectivePointsToDeduct = requiredPoints;
       } else {
         throw new BadRequestException('Mã voucher đổi thưởng không hợp lệ');
       }
@@ -337,10 +340,10 @@ export class AuthService {
       const updateRes = await tx.user.updateMany({
         where: {
           id: userId,
-          loyaltyPoints: { gte: points }, // Chỉ trừ khi điểm hiện có >= points!
+          loyaltyPoints: { gte: effectivePointsToDeduct }, // Chỉ trừ khi điểm hiện có >= effectivePointsToDeduct!
         },
         data: {
-          loyaltyPoints: { decrement: points },
+          loyaltyPoints: { decrement: effectivePointsToDeduct },
         },
       });
 
@@ -357,7 +360,7 @@ export class AuthService {
       const remainingPoints =
         updatedUser && updatedUser.loyaltyPoints !== user.loyaltyPoints
           ? updatedUser.loyaltyPoints
-          : Math.max(0, user.loyaltyPoints - points);
+          : Math.max(0, user.loyaltyPoints - effectivePointsToDeduct);
 
       const finalUser = updatedUser
         ? { ...updatedUser, loyaltyPoints: remainingPoints }
@@ -416,8 +419,8 @@ export class AuthService {
 
       const qty = userVoucher ? userVoucher.quantity : 1;
       const message = userVoucher
-        ? `Đã đổi thành công! Trừ ${points} Hạt Vàng. Bạn hiện đang sở hữu x${qty} mã ${userVoucher.code}.`
-        : `Đã đổi thành công! Trừ ${points} Hạt Vàng.`;
+        ? `Đã đổi thành công! Trừ ${effectivePointsToDeduct} Hạt Vàng. Bạn hiện đang sở hữu x${qty} mã ${userVoucher.code}.`
+        : `Đã đổi thành công! Trừ ${effectivePointsToDeduct} Hạt Vàng.`;
 
       return {
         success: true,

@@ -106,3 +106,8 @@ export class ToggleProductVisibilityDto {
   @IsBoolean()
   isSoldOutManual?: boolean;
 }
+
+export class ToggleSoldOutDto {
+  @IsBoolean()
+  isSoldOutManual: boolean;
+}

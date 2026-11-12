@@ -261,8 +261,8 @@ describe('AuthService - Loyalty Points Redemption & Voucher Accumulation', () =>
       );
 
       expect(prisma.user.updateMany).toHaveBeenCalledWith({
-        where: { id: 1, loyaltyPoints: { gte: 20 } },
-        data: { loyaltyPoints: { decrement: 20 } },
+        where: { id: 1, loyaltyPoints: { gte: 10 } },
+        data: { loyaltyPoints: { decrement: 10 } },
       });
       expect(prisma.userVoucher.create).toHaveBeenCalledWith({
         data: {
@@ -275,8 +275,48 @@ describe('AuthService - Loyalty Points Redemption & Voucher Accumulation', () =>
         },
       });
       expect(res.success).toBe(true);
-      expect(res.remainingPoints).toBe(30);
+      expect(res.remainingPoints).toBe(40);
+      expect(res.message).toContain('Trừ 10 Hạt Vàng');
       expect(res.voucher.quantity).toBe(1);
+    });
+
+    it('enforces server requiredPoints (10) when client sends excess points (50) for BREW10', async () => {
+      prisma.user.findUnique.mockResolvedValue({
+        id: 1,
+        email: 'test@example.com',
+        fullName: 'Test User',
+        phone: '0901234567',
+        loyaltyPoints: 100,
+        createdAt: new Date(),
+      });
+
+      prisma.user.updateMany.mockResolvedValue({ count: 1 });
+      prisma.userVoucher.findUnique.mockResolvedValue(null);
+      prisma.userVoucher.create.mockResolvedValue({
+        id: 11,
+        userId: 1,
+        code: 'BREW10',
+        quantity: 1,
+        discountPercent: 10,
+        minOrderAmount: 0,
+        maxDiscountAmount: 15000,
+      });
+      prisma.userVoucher.findMany.mockResolvedValue([]);
+
+      const res = await service.redeemPoints(
+        1,
+        50,
+        'Đổi BREW10 gửi thừa điểm',
+        'BREW10',
+      );
+
+      expect(prisma.user.updateMany).toHaveBeenCalledWith({
+        where: { id: 1, loyaltyPoints: { gte: 10 } },
+        data: { loyaltyPoints: { decrement: 10 } },
+      });
+      expect(res.remainingPoints).toBe(90);
+      expect(res.message).toContain('Trừ 10 Hạt Vàng');
+      expect(res.message).not.toContain('Trừ 50 Hạt Vàng');
     });
 
     it('accumulates (cộng dồn) voucher quantity if user already owns the voucher', async () => {
@@ -328,8 +368,8 @@ describe('AuthService - Loyalty Points Redemption & Voucher Accumulation', () =>
       );
 
       expect(prisma.user.updateMany).toHaveBeenCalledWith({
-        where: { id: 1, loyaltyPoints: { gte: 20 } },
-        data: { loyaltyPoints: { decrement: 20 } },
+        where: { id: 1, loyaltyPoints: { gte: 10 } },
+        data: { loyaltyPoints: { decrement: 10 } },
       });
       expect(prisma.userVoucher.update).toHaveBeenCalledWith({
         where: { id: 10 },

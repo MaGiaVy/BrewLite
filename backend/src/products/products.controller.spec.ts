@@ -1,8 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { Reflector } from '@nestjs/core';
 import { vi, describe, beforeEach, it, expect } from 'vitest';
 import { Role } from '@prisma/client';
 import * as crypto from 'node:crypto';
 import { getJwtSecret } from '../auth/jwt-secret.helper.js';
+import { ROLES_KEY } from '../auth/roles.decorator.js';
 import { ProductsController, extractUserFromRequest } from './products.controller.js';
 import { ProductsService } from './products.service.js';
 
@@ -14,6 +16,7 @@ describe('ProductsController', () => {
     create: any;
     update: any;
     toggleVisibility: any;
+    toggleSoldOut: any;
     remove: any;
   };
 
@@ -24,6 +27,7 @@ describe('ProductsController', () => {
       create: vi.fn(),
       update: vi.fn(),
       toggleVisibility: vi.fn(),
+      toggleSoldOut: vi.fn(),
       remove: vi.fn(),
     };
 
@@ -150,6 +154,35 @@ describe('ProductsController', () => {
 
       await controller.findOne(5, req);
       expect(mockProductsService.findOne).toHaveBeenCalledWith(5, false);
+    });
+  });
+
+  describe('PATCH /products/:id/sold-out — RBAC & Delegation', () => {
+    const reflector = new Reflector();
+
+    it('guards toggleSoldOut with @Roles(Role.STAFF, Role.ADMIN) while toggleVisibility stays @Roles(Role.ADMIN)', () => {
+      const soldOutRoles = reflector.get(
+        ROLES_KEY,
+        ProductsController.prototype.toggleSoldOut,
+      );
+      const visibilityRoles = reflector.get(
+        ROLES_KEY,
+        ProductsController.prototype.toggleVisibility,
+      );
+
+      expect(soldOutRoles).toEqual([Role.STAFF, Role.ADMIN]);
+      expect(visibilityRoles).toEqual([Role.ADMIN]);
+    });
+
+    it('delegates controller.toggleSoldOut(1, { isSoldOutManual: true }) to productsService.toggleSoldOut', async () => {
+      const dto = { isSoldOutManual: true };
+      const expected = { id: 1, isSoldOutManual: true };
+      mockProductsService.toggleSoldOut.mockResolvedValue(expected);
+
+      const res = await controller.toggleSoldOut(1, dto);
+
+      expect(mockProductsService.toggleSoldOut).toHaveBeenCalledWith(1, dto);
+      expect(res).toEqual(expected);
     });
   });
 });
