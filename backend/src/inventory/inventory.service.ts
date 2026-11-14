@@ -1,4 +1,6 @@
 
+export const LOYALTY_REWARD_VOUCHERS = new Set(['BREW10', 'BREW20', 'BREW50']);
+
 export const DEFAULT_VOUCHER_MAX_DISCOUNTS: Record<string, number> = {
   BREW10: 15000,
   BREWLITE10: 15000,
@@ -817,13 +819,17 @@ export class InventoryService {
       return publicData;
     };
 
+    const publicVouchers = (Array.isArray(vouchers) ? vouchers : []).filter(
+      (v: any) => !LOYALTY_REWARD_VOUCHERS.has(String(v?.code || '').toUpperCase()),
+    );
+
     return {
       sizePricing,
       toppings: drinkToppings.map(sanitizeTopping),
       allToppings: allToppingsList.map(sanitizeTopping),
       bakeryToppings: bakeryToppings.map(sanitizeTopping),
       bakeryServingStyles,
-      vouchers,
+      vouchers: publicVouchers,
     };
   }
 

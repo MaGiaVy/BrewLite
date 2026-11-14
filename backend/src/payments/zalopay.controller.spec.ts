@@ -287,6 +287,22 @@ describe('ZaloPay Integration — Service & Controller Endpoints', () => {
       expect(mockPrisma.order.update).not.toHaveBeenCalled();
     });
 
+    it('trả về return_code: -1 an toàn (không ném TypeError 500) khi callback body là undefined hoặc {}', async () => {
+      mockZaloPayService.verifyCallback.mockReturnValue(false);
+
+      const resUndefined = await controller.handleZaloPayCallback(undefined as any);
+      expect(resUndefined).toEqual({
+        return_code: -1,
+        return_message: 'mac not equal',
+      });
+
+      const resEmpty = await controller.handleZaloPayCallback({} as any);
+      expect(resEmpty).toEqual({
+        return_code: -1,
+        return_message: 'mac not equal',
+      });
+    });
+
     it('HIGH-10: bắt lỗi Prisma P2002 khi tạo Payment trùng lặp và trả về return_code: 1', async () => {
       mockZaloPayService.verifyCallback.mockReturnValue(true);
 

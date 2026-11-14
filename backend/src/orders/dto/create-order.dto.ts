@@ -1,10 +1,11 @@
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
   IsIn,
   IsInt,
+  IsNotEmpty,
   IsNumber,
   IsOptional,
   IsString,
@@ -42,11 +43,18 @@ export class OrderItemDto {
   @IsString()
   notes?: string;
 
+  @IsOptional()
+  @Transform(({ value }) =>
+    Array.isArray(value)
+      ? value.map((v) => (typeof v === 'string' ? v.trim() : v))
+      : value,
+  )
   @IsArray()
   @ArrayMaxSize(10, { message: 'Mỗi món chỉ được chọn tối đa 10 topping' })
   @IsString({ each: true })
+  @IsNotEmpty({ each: true, message: 'Tên topping không được để trống' })
   @MaxLength(50, { each: true, message: 'Tên topping không được vượt quá 50 ký tự' })
-  toppings: string[];
+  toppings?: string[];
 
   @IsInt()
   @Min(1)

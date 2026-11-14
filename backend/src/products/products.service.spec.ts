@@ -339,5 +339,24 @@ describe('ProductsService — Admin Menu CRUD & Visibility Management', () => {
       expect(res.outOfStockSizes).toEqual(['S', 'M', 'L']);
       expect(res.isOutOfStock).toBe(true);
     });
+
+    it('ẩn sản phẩm ngừng bán (isActive: false) trên findOne khi không phải Admin, nhưng vẫn cho Admin xem', async () => {
+      mockPrisma.product.findUnique.mockResolvedValue({
+        id: 99,
+        name: 'Món Đã Ngừng Bán',
+        basePrice: 40000,
+        sizeUpchargeM: 5000,
+        sizeUpchargeL: 10000,
+        isActive: false,
+        isSoldOutManual: false,
+        recipes: [],
+      });
+
+      await expect(service.findOne(99, false)).rejects.toThrow(NotFoundException);
+
+      const adminView = await service.findOne(99, true);
+      expect(adminView.id).toBe(99);
+      expect(adminView.isActive).toBe(false);
+    });
   });
 });

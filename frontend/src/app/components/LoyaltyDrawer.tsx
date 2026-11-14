@@ -31,9 +31,6 @@ export default function LoyaltyDrawer({ isOpen, onClose }: LoyaltyDrawerProps) {
   const [isRefreshingPoints, setIsRefreshingPoints] = useState(false);
   const [vouchers, setVouchers] = useState<VoucherItem[]>([
     { code: "BREWCOZY", description: "Ưu đãi Giờ vàng giảm 15% toàn menu", discountPercent: 15, minOrderAmount: 0, maxDiscountAmount: 20000, quantity: 1 },
-    { code: "BREW10", description: "Voucher Giảm 10% Toàn Đơn", discountPercent: 10, minOrderAmount: 0, maxDiscountAmount: 15000, quantity: 1 },
-    { code: "BREW20", description: "Voucher Giảm 20% Đơn Từ 60k", discountPercent: 20, minOrderAmount: 60000, maxDiscountAmount: 25000, quantity: 1 },
-    { code: "BREW50", description: "Siêu Voucher Giảm 50% VIP", discountPercent: 50, minOrderAmount: 120000, maxDiscountAmount: 60000, quantity: 1 },
   ]);
 
   const userVouchers = useMemo(() => user?.vouchers || [], [user?.vouchers]);
@@ -45,9 +42,6 @@ export default function LoyaltyDrawer({ isOpen, onClose }: LoyaltyDrawerProps) {
       .then((data) => {
         let baseList: VoucherItem[] = [
           { code: "BREWCOZY", description: "Ưu đãi Giờ vàng giảm 15% toàn menu", discountPercent: 15, minOrderAmount: 0, maxDiscountAmount: 20000, quantity: 1 },
-          { code: "BREW10", description: "Voucher Giảm 10% Toàn Đơn", discountPercent: 10, minOrderAmount: 0, maxDiscountAmount: 15000, quantity: 1 },
-          { code: "BREW20", description: "Voucher Giảm 20% Đơn Từ 60k", discountPercent: 20, minOrderAmount: 60000, maxDiscountAmount: 25000, quantity: 1 },
-          { code: "BREW50", description: "Siêu Voucher Giảm 50% VIP", discountPercent: 50, minOrderAmount: 120000, maxDiscountAmount: 60000, quantity: 1 },
         ];
         if (data && Array.isArray(data.vouchers) && data.vouchers.length > 0) {
           baseList = data.vouchers.map((v: VoucherItem) => ({ ...v, quantity: v.quantity || 1 }));

@@ -391,6 +391,16 @@ describe('CustomersService — Admin Customer Management API', () => {
       });
       expect(result.isActive).toBe(false);
     });
+
+    it('ném BadRequestException nếu thiếu hoặc truyền isActive không phải boolean', async () => {
+      await expect(
+        service.toggleCustomerStatus(3, undefined as any),
+      ).rejects.toThrow(BadRequestException);
+      await expect(
+        service.toggleCustomerStatus(3, 'true' as any),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.user.findUnique).not.toHaveBeenCalled();
+    });
   });
 
   describe('deleteCustomer (Smart Delete)', () => {

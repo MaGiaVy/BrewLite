@@ -8,6 +8,45 @@ export interface RequiredIngredientItem {
 }
 
 /**
+ * Khớp duy nhất 1 loại topping theo tên hoặc toppingId, trả về toàn bộ dòng công thức thuộc cùng toppingId đó.
+ * Chỉ cho phép khớp chuỗi con (substring) khi từ khóa sau khi trim có độ dài >= 3 ký tự.
+ */
+export function matchSingleToppingRows(
+  toppingRecipes: any[],
+  topStr: string,
+): any[] {
+  const lowerTop = typeof topStr === 'string' ? topStr.trim().toLowerCase() : '';
+  if (!lowerTop || !Array.isArray(toppingRecipes) || toppingRecipes.length === 0) {
+    return [];
+  }
+
+  let canonicalMatch = toppingRecipes.find(
+    (tr) =>
+      tr.toppingId?.toLowerCase() === lowerTop ||
+      tr.toppingName?.toLowerCase() === lowerTop,
+  );
+
+  if (!canonicalMatch && lowerTop.length >= 3) {
+    canonicalMatch = toppingRecipes.find(
+      (tr) =>
+        tr.toppingName?.toLowerCase().includes(lowerTop) ||
+        lowerTop.includes(tr.toppingName?.toLowerCase()),
+    );
+  }
+
+  if (!canonicalMatch) {
+    return [];
+  }
+
+  if (canonicalMatch.toppingId) {
+    return toppingRecipes.filter(
+      (tr) => tr.toppingId === canonicalMatch.toppingId,
+    );
+  }
+  return [canonicalMatch];
+}
+
+/**
  * Tính toán định lượng nguyên vật liệu (BOM) cần thiết cho danh sách món trong đơn hàng.
  * Bao gồm:
  * 1. Nguyên liệu theo công thức đồ uống / bánh ngọt (Recipe).
@@ -20,7 +59,7 @@ export async function computeRequiredIngredients(
   items: Array<{
     productId: number;
     size: string;
-    toppings: string[];
+    toppings?: string[];
     quantity: number;
   }>,
 ): Promise<RequiredIngredientItem[]> {
@@ -145,13 +184,7 @@ export async function computeRequiredIngredients(
     // Tính nguyên liệu cho Toppings đi kèm
     if (Array.isArray(item.toppings) && item.toppings.length > 0) {
       for (const topStr of item.toppings) {
-        const lowerTop = topStr.toLowerCase();
-        const matchedTops = toppingRecipes.filter(
-          (tr: any) =>
-            tr.toppingId.toLowerCase() === lowerTop ||
-            tr.toppingName.toLowerCase().includes(lowerTop) ||
-            lowerTop.includes(tr.toppingName.toLowerCase()),
-        );
+        const matchedTops = matchSingleToppingRows(toppingRecipes, topStr);
         for (const tr of matchedTops) {
           addRequirement(tr.ingredient, tr.amount * item.quantity, true);
         }

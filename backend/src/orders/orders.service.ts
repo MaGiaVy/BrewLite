@@ -12,12 +12,13 @@ import { OrderStatus, Role } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateOrderDto } from './dto/create-order.dto.js';
 import { assertTransition } from '../payments/state-machine.helper.js';
-import { fetchGlobalSizePricing } from '../inventory/inventory.service.js';
+import { fetchGlobalSizePricing, LOYALTY_REWARD_VOUCHERS } from '../inventory/inventory.service.js';
 
-import { computeRequiredIngredients, RequiredIngredientItem } from './bom.helper.js';
+import { computeRequiredIngredients, matchSingleToppingRows, RequiredIngredientItem } from './bom.helper.js';
 import { expirePendingOrders, refundOrderResources } from './order-refund.helper.js';
 
 export type { RequiredIngredientItem };
+export { LOYALTY_REWARD_VOUCHERS };
 
 const POINTS_PER_VND = 1000;
 
@@ -171,18 +172,21 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       let toppingSum = 0;
       if (Array.isArray(item.toppings) && item.toppings.length > 0) {
         for (const topStr of item.toppings) {
-          if (!topStr || !topStr.trim()) continue;
-          const lowerTop = topStr.toLowerCase().trim();
-          const matchedTopping = toppingRecipes.find(
-            (tr: any) =>
-              tr.toppingId?.toLowerCase() === lowerTop ||
-              tr.toppingName?.toLowerCase() === lowerTop ||
-              tr.toppingName?.toLowerCase().includes(lowerTop) ||
-              lowerTop.includes(tr.toppingName?.toLowerCase()),
-          );
-          toppingSum += matchedTopping
-            ? Number(matchedTopping.price ?? 8000)
-            : 8000;
+          const cleanTop = typeof topStr === 'string' ? topStr.trim() : '';
+          if (!cleanTop) {
+            throw new BadRequestException('Tên topping không được để trống.');
+          }
+          const matchedRows = matchSingleToppingRows(toppingRecipes, cleanTop);
+          if (Array.isArray(toppingRecipes) && toppingRecipes.length > 0) {
+            if (matchedRows.length === 0) {
+              throw new BadRequestException(
+                `Topping "${cleanTop}" không tồn tại hoặc đã ngừng phục vụ.`,
+              );
+            }
+            toppingSum += Number(matchedRows[0]?.price ?? 8000);
+          } else {
+            toppingSum += 8000;
+          }
         }
       }
 
@@ -246,6 +250,18 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
             );
           }
 
+          const discountModel = tx.discountCode?.findUnique
+            ? tx.discountCode
+            : (this.prisma as any).discountCode;
+          const adminVoucherConfig = discountModel?.findUnique
+            ? await discountModel.findUnique({ where: { code } })
+            : null;
+          if (adminVoucherConfig && adminVoucherConfig.isActive === false) {
+            throw new BadRequestException(
+              `Mã giảm giá "${code}" hiện đang tạm ngưng áp dụng.`,
+            );
+          }
+
           const countModel = tx.order?.count ? tx.order : (this.prisma as any).order;
           if (countModel?.count) {
             const pendingWithVoucher = await countModel.count({
@@ -263,12 +279,13 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
             }
           }
 
-          if (
-            personalVoucher.minOrderAmount &&
-            rawSubtotal < Number(personalVoucher.minOrderAmount)
-          ) {
+          const requiredMinOrder = Math.max(
+            Number(personalVoucher.minOrderAmount || 0),
+            Number(adminVoucherConfig?.minOrderAmount || 0),
+          );
+          if (requiredMinOrder > 0 && rawSubtotal < requiredMinOrder) {
             throw new BadRequestException(
-              `Mã "${code}" yêu cầu đơn hàng tối thiểu ${Number(personalVoucher.minOrderAmount).toLocaleString('vi-VN')}đ.`,
+              `Mã "${code}" yêu cầu đơn hàng tối thiểu ${requiredMinOrder.toLocaleString('vi-VN')}đ.`,
             );
           }
 
@@ -311,6 +328,12 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
           }
           voucherDeducted = true;
         } else {
+          if (LOYALTY_REWARD_VOUCHERS.has(code)) {
+            throw new BadRequestException(
+              `Bạn chưa đổi mã giảm giá "${code}" từ điểm Hạt Vàng hoặc mã đã được sử dụng hết.`,
+            );
+          }
+
           // Tìm trong mã toàn hệ thống (DiscountCode)
           const discountModel = tx.discountCode?.findUnique
             ? tx.discountCode
@@ -475,7 +498,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
               iceLevel: item.iceLevel ?? '100%',
               temperature: item.temperature ?? 'COLD',
               notes: item.notes ?? null,
-              toppings: item.toppings,
+              toppings: item.toppings || [],
               quantity: item.quantity,
               unitPrice: itemServerPrices[idx],
             })),
@@ -641,13 +664,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
 
         if (Array.isArray(item.toppings)) {
           for (const topStr of item.toppings) {
-            const lowerTop = topStr.toLowerCase();
-            const matchedTops = allToppingRecipes.filter(
-              (tr: any) =>
-                tr.toppingId.toLowerCase() === lowerTop ||
-                tr.toppingName.toLowerCase().includes(lowerTop) ||
-                lowerTop.includes(tr.toppingName.toLowerCase()),
-            );
+            const matchedTops = matchSingleToppingRows(allToppingRecipes, topStr);
             for (const tr of matchedTops) {
               toppingBreakdown.push({
                 toppingName: tr.toppingName,

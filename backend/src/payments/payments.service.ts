@@ -807,15 +807,20 @@ export class PaymentsService {
    * Task 2.5: Idempotency nếu trạng thái đơn là PAID, PREPARING, READY, hoặc COMPLETED (tránh lùi trạng thái đơn)
    *           Bắt lỗi P2002 khi tạo payment và trả về return_code: 1
    */
-  async handleZaloPayCallback(body: { data: string; mac: string; type?: number }) {
-    const isValid = this.zaloPayService.verifyCallback(body.data, body.mac);
-    if (!isValid) {
+  async handleZaloPayCallback(body: { data?: string; mac?: string; type?: number }) {
+    const dataStr = body?.data;
+    const macStr = body?.mac;
+    const isValid = this.zaloPayService.verifyCallback(
+      dataStr as string,
+      macStr as string,
+    );
+    if (!isValid || typeof dataStr !== 'string') {
       this.logger.error('[ZaloPay Callback] Chữ ký MAC không hợp lệ (Tampered Data)');
       return { return_code: -1, return_message: 'mac not equal' };
     }
 
     try {
-      const dataJson = JSON.parse(body.data);
+      const dataJson = JSON.parse(dataStr);
       const { app_trans_id, amount, zp_trans_id, embed_data } = dataJson;
 
       let orderId: number | null = null;

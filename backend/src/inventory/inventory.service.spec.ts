@@ -604,5 +604,24 @@ describe('InventoryService — Sprint 4 (Admin BOM Warehouse, Full CRUD & Optimi
       expect(stats.totalCogsSold).toBe(65 * 10000);
       expect(stats.topSellingProducts[0].totalQuantity).toBe(65);
     });
+
+    it('ẩn các mã đổi điểm Hạt Vàng (BREW10, BREW20, BREW50) khỏi GET /inventory/pricing-config public', async () => {
+      mockPrisma.storeSetting.findMany.mockResolvedValue([]);
+      mockPrisma.toppingRecipe.findMany.mockResolvedValue([]);
+      mockPrisma.discountCode.findMany.mockResolvedValue([
+        { id: 1, code: 'BREW10', discountPercent: 10, maxDiscountAmount: 15000, isActive: true },
+        { id: 2, code: 'BREWCOZY', discountPercent: 15, maxDiscountAmount: 25000, isActive: true },
+        { id: 3, code: 'BREW20', discountPercent: 20, maxDiscountAmount: 25000, isActive: true },
+        { id: 4, code: 'BREW50', discountPercent: 50, maxDiscountAmount: 60000, isActive: true },
+      ]);
+
+      const config = await service.getPublicPricingConfig();
+      const codes = config.vouchers.map((v: any) => v.code);
+
+      expect(codes).toEqual(['BREWCOZY']);
+      expect(codes).not.toContain('BREW10');
+      expect(codes).not.toContain('BREW20');
+      expect(codes).not.toContain('BREW50');
+    });
   });
 });

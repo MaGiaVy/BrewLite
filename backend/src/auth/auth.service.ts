@@ -97,7 +97,8 @@ export class AuthService {
   // ─── Register ────────────────────────────────────────────────────────────────
 
   async register(dto: RegisterDto) {
-    if (!dto.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(dto.email)) {
+    const normalizedEmail = dto.email ? dto.email.trim().toLowerCase() : '';
+    if (!normalizedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
       throw new BadRequestException('Email không hợp lệ');
     }
     if (!dto.password || dto.password.length < 6) {
@@ -107,7 +108,7 @@ export class AuthService {
       throw new BadRequestException('Họ và tên không được để trống');
     }
     const existing = await this.prisma.user.findUnique({
-      where: { email: dto.email },
+      where: { email: normalizedEmail },
     });
     if (existing) {
       throw new ConflictException(
@@ -119,7 +120,7 @@ export class AuthService {
 
     const user = await this.prisma.user.create({
       data: {
-        email: dto.email,
+        email: normalizedEmail,
         passwordHash,
         fullName: dto.fullName,
         phone: dto.phone ?? null,
@@ -144,8 +145,13 @@ export class AuthService {
   // ─── Login ───────────────────────────────────────────────────────────────────
 
   async login(dto: LoginDto) {
+    const normalizedEmail = dto.email ? dto.email.trim().toLowerCase() : '';
+    if (!normalizedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+      throw new BadRequestException('Email không hợp lệ');
+    }
+
     const user = await this.prisma.user.findUnique({
-      where: { email: dto.email },
+      where: { email: normalizedEmail },
     });
 
     if (!user) {

@@ -6,7 +6,10 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Role } from '@prisma/client';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
 import { UsersService } from './users.service.js';
+import { UpdateStaffDto } from './dto/update-staff.dto.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 
 describe('UsersService — Staff & Admin User Management', () => {
@@ -492,6 +495,57 @@ describe('UsersService — Staff & Admin User Management', () => {
         where: { id: 16 },
         data: { isActive: false },
       });
+    });
+  });
+
+  describe('Security Audit Fixes — Cross-Role Guard & UpdateStaffDto Enum & isActive Validation', () => {
+    it('chặn thao túng tài khoản CUSTOMER qua getStaffById, updateStaff, toggleStaffStatus, deleteStaff', async () => {
+      prisma.user.findUnique.mockResolvedValue({
+        id: 50,
+        email: 'customer@brewlite.vn',
+        fullName: 'Khách Hàng',
+        role: Role.CUSTOMER,
+        isActive: true,
+      });
+
+      await expect(service.getStaffById(50)).rejects.toThrow(NotFoundException);
+      await expect(
+        service.updateStaff(50, { fullName: 'Hacked' }, 1),
+      ).rejects.toThrow(NotFoundException);
+      await expect(
+        service.toggleStaffStatus(50, false, 1),
+      ).rejects.toThrow(NotFoundException);
+      await expect(service.deleteStaff(50, 1)).rejects.toThrow(NotFoundException);
+      expect(prisma.user.update).not.toHaveBeenCalled();
+      expect(prisma.user.delete).not.toHaveBeenCalled();
+    });
+
+    it('chặn gán role = CUSTOMER qua updateStaff và từ chối role không hợp lệ qua UpdateStaffDto', async () => {
+      prisma.user.findUnique.mockResolvedValue({
+        id: 10,
+        email: 'staff10@brewlite.vn',
+        role: Role.STAFF,
+        isActive: true,
+      });
+
+      await expect(
+        service.updateStaff(10, { role: Role.CUSTOMER }, 1),
+      ).rejects.toThrow(BadRequestException);
+
+      const invalidDto = plainToInstance(UpdateStaffDto, {
+        role: 'SUPERUSER',
+      });
+      const errors = await validate(invalidDto);
+      expect(errors.length).toBeGreaterThan(0);
+    });
+
+    it('ném BadRequestException khi toggleStaffStatus nhận isActive không phải boolean', async () => {
+      await expect(
+        service.toggleStaffStatus(10, undefined as any, 1),
+      ).rejects.toThrow(BadRequestException);
+      await expect(
+        service.toggleStaffStatus(10, 'false' as any, 1),
+      ).rejects.toThrow(BadRequestException);
     });
   });
 });

@@ -232,7 +232,7 @@ export class ProductsService {
         },
       },
     });
-    if (!product) {
+    if (!product || (!isAdmin && product.isActive === false)) {
       throw new NotFoundException(`Product #${id} not found`);
     }
     return this.enrichProductStock(product, undefined, isAdmin);

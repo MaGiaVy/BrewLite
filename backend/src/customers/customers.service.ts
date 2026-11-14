@@ -139,6 +139,12 @@ export class CustomersService {
   }
 
   async toggleCustomerStatus(id: number, isActive: boolean) {
+    if (typeof isActive !== 'boolean') {
+      throw new BadRequestException(
+        'Trạng thái isActive bắt buộc phải là kiểu boolean (true hoặc false)',
+      );
+    }
+
     const user = await this.prisma.user.findUnique({ where: { id } });
     if (!user || user.role !== Role.CUSTOMER) {
       throw new NotFoundException(`Không tìm thấy khách hàng với ID #${id}`);

@@ -54,7 +54,7 @@ export class UsersService {
         createdAt: true,
       },
     });
-    if (!user) {
+    if (!user || user.role === Role.CUSTOMER) {
       throw new NotFoundException(`Không tìm thấy nhân viên với ID ${id}`);
     }
     return user;
@@ -118,7 +118,7 @@ export class UsersService {
     }
 
     const user = await this.prisma.user.findUnique({ where: { id } });
-    if (!user) {
+    if (!user || user.role === Role.CUSTOMER) {
       throw new NotFoundException(`Không tìm thấy nhân viên với ID ${id}`);
     }
 
@@ -160,6 +160,13 @@ export class UsersService {
           'Không thể thay đổi vai trò của tài khoản Quản trị viên (Admin)',
         );
       }
+    }
+
+    // Không cho phép hạ quyền nhân viên thành tài khoản CUSTOMER qua API /staff
+    if (dto.role === Role.CUSTOMER) {
+      throw new BadRequestException(
+        'Không thể gán vai trò CUSTOMER cho tài khoản nhân sự',
+      );
     }
 
     // Chính sách Single Root Admin: không cho phép thăng cấp bất kỳ tài khoản nào lên ADMIN
@@ -216,6 +223,12 @@ export class UsersService {
     isActive: boolean,
     currentAdminId?: number,
   ) {
+    if (typeof isActive !== 'boolean') {
+      throw new BadRequestException(
+        'Trạng thái isActive bắt buộc phải là kiểu boolean (true hoặc false)',
+      );
+    }
+
     if (currentAdminId && id === currentAdminId) {
       throw new BadRequestException(
         'Bạn không thể tự khóa hoặc xóa tài khoản của chính mình',
@@ -223,7 +236,7 @@ export class UsersService {
     }
 
     const user = await this.prisma.user.findUnique({ where: { id } });
-    if (!user) {
+    if (!user || user.role === Role.CUSTOMER) {
       throw new NotFoundException(`Không tìm thấy nhân viên với ID ${id}`);
     }
 
@@ -253,7 +266,7 @@ export class UsersService {
     }
 
     const user = await this.prisma.user.findUnique({ where: { id } });
-    if (!user) {
+    if (!user || user.role === Role.CUSTOMER) {
       throw new NotFoundException(`Không tìm thấy nhân viên với ID ${id}`);
     }
 

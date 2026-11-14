@@ -1,4 +1,4 @@
-import { IsEmail, IsNotEmpty, IsOptional, IsString, MinLength, IsBoolean } from 'class-validator';
+import { IsBoolean, IsEmail, IsEnum, IsNotEmpty, IsOptional, IsString, MinLength } from 'class-validator';
 import { Role } from '@prisma/client';
 
 export class UpdateStaffDto {
@@ -24,6 +24,7 @@ export class UpdateStaffDto {
   @IsOptional()
   position?: string;
 
+  @IsEnum(Role, { message: 'Vai trò người dùng không hợp lệ' })
   @IsOptional()
   role?: Role;
 

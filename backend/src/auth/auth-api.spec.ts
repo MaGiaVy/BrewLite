@@ -333,5 +333,59 @@ describe('Task T5.1b — Auth Vertical Slice (API-T10..API-T13)', () => {
         role: Role.ADMIN,
       });
     });
+
+    it('chuẩn hóa email không phân biệt chữ hoa/thường và khoảng trắng khi đăng ký & đăng nhập', async () => {
+      prisma.user.findUnique.mockResolvedValueOnce(null);
+      const hashed = await bcrypt.hash('Secret123', 10);
+
+      prisma.user.create.mockResolvedValueOnce({
+        id: 22,
+        email: 'mixedcase@brewlite.vn',
+        passwordHash: hashed,
+        fullName: 'Test Case',
+        phone: null,
+        role: Role.CUSTOMER,
+        isActive: true,
+        loyaltyPoints: 0,
+        createdAt: new Date(),
+      });
+
+      await authService.register({
+        email: '  MixedCase@BrewLite.vn  ',
+        password: 'Secret123',
+        fullName: 'Test Case',
+      });
+
+      expect(prisma.user.findUnique).toHaveBeenCalledWith({
+        where: { email: 'mixedcase@brewlite.vn' },
+      });
+      expect(prisma.user.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ email: 'mixedcase@brewlite.vn' }),
+        }),
+      );
+
+      prisma.user.findUnique.mockResolvedValueOnce({
+        id: 22,
+        email: 'mixedcase@brewlite.vn',
+        passwordHash: hashed,
+        fullName: 'Test Case',
+        phone: null,
+        role: Role.CUSTOMER,
+        isActive: true,
+        loyaltyPoints: 0,
+        createdAt: new Date(),
+      });
+
+      const loginRes = await authService.login({
+        email: 'MIXEDCASE@BREWLITE.VN ',
+        password: 'Secret123',
+      });
+
+      expect(prisma.user.findUnique).toHaveBeenLastCalledWith({
+        where: { email: 'mixedcase@brewlite.vn' },
+      });
+      expect(loginRes.accessToken).toBeDefined();
+    });
   });
 });

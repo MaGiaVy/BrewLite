@@ -12,7 +12,7 @@ import { OrderStatus, Role } from '@prisma/client';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { CreateOrderDto } from './dto/create-order.dto.js';
-import { computeRequiredIngredients } from './bom.helper.js';
+import { computeRequiredIngredients, matchSingleToppingRows } from './bom.helper.js';
 
 describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Optimistic Locking, RBAC)', () => {
   let service: OrdersService;
@@ -1023,6 +1023,19 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
 
       prisma.$transaction.mockImplementation(async (cb) => {
         return cb({
+          userVoucher: {
+            findUnique: vi.fn().mockResolvedValue({
+              id: 11,
+              userId: 1,
+              code: 'BREW10',
+              quantity: 1,
+              discountPercent: 10,
+              minOrderAmount: 0,
+              maxDiscountAmount: 15000,
+            }),
+            updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+            deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
+          },
           order: {
             create: vi.fn().mockResolvedValue(mockCreatedOrder),
           },
@@ -1135,6 +1148,19 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
 
       prisma.$transaction.mockImplementation(async (cb) => {
         return cb({
+          userVoucher: {
+            findUnique: vi.fn().mockResolvedValue({
+              id: 11,
+              userId: 1,
+              code: 'BREW10',
+              quantity: 1,
+              discountPercent: 10,
+              minOrderAmount: 0,
+              maxDiscountAmount: 15000,
+            }),
+            updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+            deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
+          },
           order: {
             create: vi.fn().mockResolvedValue(mockCreatedOrder),
           },
@@ -1163,6 +1189,16 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
     });
 
     it('từ chối mã BREW20 nếu đơn dưới 60.000đ và áp dụng đúng khi đủ điều kiện', async () => {
+      prisma.userVoucher.findUnique.mockResolvedValueOnce({
+        id: 12,
+        userId: 1,
+        code: 'BREW20',
+        quantity: 1,
+        discountPercent: 20,
+        minOrderAmount: 60000,
+        maxDiscountAmount: 25000,
+      });
+
       // Đơn 50.000đ < 60.000đ -> Lỗi
       await expect(
         service.createOrder(
@@ -1181,7 +1217,7 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
           },
           1,
         ),
-      ).rejects.toThrow(BadRequestException);
+      ).rejects.toThrow('60.000');
     });
 
     it('giới hạn mức giảm tối đa 60.000đ cho mã BREW50', async () => {
@@ -1196,6 +1232,19 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
 
       prisma.$transaction.mockImplementation(async (cb) => {
         return cb({
+          userVoucher: {
+            findUnique: vi.fn().mockResolvedValue({
+              id: 13,
+              userId: 1,
+              code: 'BREW50',
+              quantity: 1,
+              discountPercent: 50,
+              minOrderAmount: 120000,
+              maxDiscountAmount: 60000,
+            }),
+            updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+            deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
+          },
           order: {
             create: vi.fn().mockResolvedValue(mockCreatedOrder),
           },
@@ -2469,11 +2518,11 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
       const mockTxFailDiscount = {
         discountCode: {
           findUnique: vi.fn().mockResolvedValue({
-            id: 1,
-            code: 'BREW10',
-            discountPercent: 10,
+            id: 2,
+            code: 'BREWCOZY',
+            discountPercent: 15,
             minOrderAmount: 0,
-            maxDiscountAmount: 15000,
+            maxDiscountAmount: 25000,
             isActive: true,
           }),
           update: vi.fn().mockRejectedValue(new Error('Discount update failed')),
@@ -2485,7 +2534,7 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
 
       await expect(
         service.createOrder(
-          { items: [{ productId: 1, size: 'M', toppings: [], quantity: 1 }], discountCode: 'BREW10' },
+          { items: [{ productId: 1, size: 'M', toppings: [], quantity: 1 }], discountCode: 'BREWCOZY' },
           1,
         ),
       ).rejects.toThrow('Discount update failed');
@@ -3353,6 +3402,122 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
       expect((res as any).id).toBe(951);
       expect(res.orderId).toBe(951);
       expect((res as any).isIdempotent).toBe(true);
+    });
+  });
+
+  describe('Security Audit Fixes — Loyalty Voucher & Topping Normalization', () => {
+    it('chặn sử dụng BREW10, BREW20, BREW50 khi khách chưa đổi điểm Hạt Vàng (userVoucher === null)', async () => {
+      prisma.userVoucher.findUnique.mockResolvedValue(null);
+
+      for (const code of ['BREW10', 'BREW20', 'BREW50']) {
+        await expect(
+          service.createOrder(
+            {
+              items: [{ productId: 1, size: 'L', toppings: [], quantity: 4 }],
+              discountCode: code,
+            },
+            1,
+          ),
+        ).rejects.toThrow(BadRequestException);
+      }
+    });
+
+    it('chặn sử dụng voucher cá nhân khi Admin đã tắt isActive trong DiscountCode', async () => {
+      prisma.userVoucher.findUnique.mockResolvedValueOnce({
+        id: 21,
+        userId: 1,
+        code: 'BREW10',
+        quantity: 1,
+        discountPercent: 10,
+        minOrderAmount: 0,
+        maxDiscountAmount: 15000,
+      });
+      prisma.discountCode.findUnique.mockResolvedValueOnce({
+        id: 1,
+        code: 'BREW10',
+        discountPercent: 10,
+        minOrderAmount: 0,
+        maxDiscountAmount: 15000,
+        isActive: false,
+      });
+
+      await expect(
+        service.createOrder(
+          {
+            items: [{ productId: 1, size: 'M', toppings: [], quantity: 2 }],
+            discountCode: 'BREW10',
+          },
+          1,
+        ),
+      ).rejects.toThrow('tạm ngưng áp dụng');
+    });
+
+    it('từ chối chuỗi topping rỗng/khoảng trắng qua CreateOrderDto ValidationPipe', async () => {
+      const blankDto = plainToInstance(CreateOrderDto, {
+        items: [{ productId: 1, size: 'M', toppings: ['   '], quantity: 1 }],
+      });
+      const errors = await validate(blankDto);
+      expect(errors.length).toBeGreaterThan(0);
+
+      const emptyDto = plainToInstance(CreateOrderDto, {
+        items: [{ productId: 1, size: 'M', toppings: [''], quantity: 1 }],
+      });
+      expect((await validate(emptyDto)).length).toBeGreaterThan(0);
+    });
+
+    it('createOrder chặn topping rỗng, 1 ký tự ("a") hoặc không tồn tại; matchSingleToppingRows chỉ khớp 1 topping canonical', async () => {
+      prisma.toppingRecipe.findMany.mockResolvedValue([
+        {
+          toppingId: 'boba',
+          toppingName: 'Trân châu trắng giòn',
+          price: 8000,
+          amount: 40,
+          isActive: true,
+          ingredientId: 11,
+          ingredient: { id: 11, name: 'Trân châu trắng', unit: 'g' },
+        },
+        {
+          toppingId: 'cream',
+          toppingName: 'Kem Cheese Muối Biển',
+          price: 10000,
+          amount: 30,
+          isActive: true,
+          ingredientId: 12,
+          ingredient: { id: 12, name: 'Kem whipping', unit: 'ml' },
+        },
+        {
+          toppingId: 'cream',
+          toppingName: 'Kem Cheese Muối Biển',
+          price: 10000,
+          amount: 2,
+          isActive: true,
+          ingredientId: 13,
+          ingredient: { id: 13, name: 'Muối biển', unit: 'g' },
+        },
+      ]);
+
+      for (const badTop of [' ', '', 'a', 'topping_khong_ton_tai']) {
+        await expect(
+          service.createOrder(
+            {
+              items: [
+                { productId: 1, size: 'M', toppings: [badTop], quantity: 1 },
+              ],
+            },
+            1,
+          ),
+        ).rejects.toThrow(BadRequestException);
+      }
+
+      const multiRecipes = [
+        { toppingId: 'boba', toppingName: 'Trân châu trắng giòn', amount: 40 },
+        { toppingId: 'cream', toppingName: 'Kem Cheese Muối Biển', amount: 30 },
+        { toppingId: 'cream', toppingName: 'Kem Cheese Muối Biển', amount: 2 },
+      ];
+      expect(matchSingleToppingRows(multiRecipes, ' ')).toEqual([]);
+      expect(matchSingleToppingRows(multiRecipes, 'a')).toEqual([]);
+      expect(matchSingleToppingRows(multiRecipes, 'cream')).toHaveLength(2);
+      expect(matchSingleToppingRows(multiRecipes, 'Trân châu trắng')).toHaveLength(1);
     });
   });
 });

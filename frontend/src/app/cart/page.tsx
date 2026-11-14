@@ -475,15 +475,10 @@ function PromoCard({
 
     // Validate code
     const found = vouchers?.find((v) => v.code === clean);
-    if (
-      !found &&
-      clean !== "BREWCOZY" &&
-      clean !== "BREW10" &&
-      clean !== "BREW20" &&
-      clean !== "BREW50" &&
-      clean !== "BREWLITE10"
-    ) {
-      setErrorMessage(`Mã giảm giá "${clean}" không tồn tại hoặc đã hết hạn.`);
+    if (!found && clean !== "BREWCOZY") {
+      setErrorMessage(
+        `Mã giảm giá "${clean}" không hợp lệ, chưa đổi điểm hoặc đã hết hạn.`
+      );
       return;
     }
 
@@ -991,9 +986,6 @@ export default function CartPage() {
       .then((data) => {
         let baseList: VoucherItem[] = [
           { code: "BREWCOZY", description: "Giờ vàng -15%", discountPercent: 15, minOrderAmount: 0, maxDiscountAmount: 25000, quantity: 1 },
-          { code: "BREW10", description: "Voucher Giảm 10% Toàn Đơn", discountPercent: 10, minOrderAmount: 0, maxDiscountAmount: 15000, quantity: 1 },
-          { code: "BREW20", description: "Voucher Giảm 20% Đơn Từ 60k", discountPercent: 20, minOrderAmount: 60000, maxDiscountAmount: 25000, quantity: 1 },
-          { code: "BREW50", description: "Siêu Voucher Giảm 50% VIP", discountPercent: 50, minOrderAmount: 120000, maxDiscountAmount: 60000, quantity: 1 },
         ];
         if (data && Array.isArray(data.vouchers) && data.vouchers.length > 0) {
           baseList = data.vouchers.map((v: VoucherItem) => {
