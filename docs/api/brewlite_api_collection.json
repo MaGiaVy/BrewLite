@@ -15,6 +15,36 @@
       "key": "max_response_time_ms",
       "value": "500",
       "type": "string"
+    },
+    {
+      "key": "customerEmail",
+      "value": "khach@brewlite.vn",
+      "type": "string"
+    },
+    {
+      "key": "customerPassword",
+      "value": "Password123",
+      "type": "string"
+    },
+    {
+      "key": "staffEmail",
+      "value": "staff@brewlite.vn",
+      "type": "string"
+    },
+    {
+      "key": "staffPassword",
+      "value": "123456",
+      "type": "string"
+    },
+    {
+      "key": "adminEmail",
+      "value": "admin@brewlite.vn",
+      "type": "string"
+    },
+    {
+      "key": "adminPassword",
+      "value": "Admin@123",
+      "type": "string"
     }
   ],
   "item": [
@@ -36,8 +66,8 @@
                   "    const list = safeJson();",
                   "    pm.expect(list).to.be.an('array').that.is.not.empty;",
                   "    const drink = list.find(p => !p.isOutOfStock && p.category !== 'bakery' && (p.availableServings === undefined || p.availableServings >= 10)) || list.find(p => !p.isOutOfStock) || list[0];",
-                  "    pm.environment.set('demoDrinkId', String(drink.id));",
-                  "    pm.environment.set('demoDrinkName', drink.name || 'Cà phê');",
+                  "    pm.environment.set('demoDrinkId', String(drink.id)); pm.collectionVariables.set('demoDrinkId', String(drink.id));",
+                  "    pm.environment.set('demoDrinkName', drink.name || 'Cà phê'); pm.collectionVariables.set('demoDrinkName', drink.name || 'Cà phê');",
                   "});"
                 ]
               }
@@ -153,7 +183,7 @@
                   "    const list = safeJson();",
                   "    pm.expect(list).to.be.an('array').that.is.not.empty;",
                   "    const drink = list.find(p => !p.isOutOfStock && p.category !== 'bakery' && (p.availableServings === undefined || p.availableServings >= 10)) || list.find(p => !p.isOutOfStock) || list[0];",
-                  "    pm.environment.set('demoDrinkId', String(drink.id));",
+                  "    pm.environment.set('demoDrinkId', String(drink.id)); pm.collectionVariables.set('demoDrinkId', String(drink.id));",
                   "});",
                   "const maxMs = Number(pm.environment.get('max_response_time_ms') || pm.collectionVariables.get('max_response_time_ms') || 500);",
                   "pm.test('SLA Assignment 1 Sec 4.2: Response time < ' + maxMs + 'ms', function () {",
@@ -229,7 +259,7 @@
                 "type": "text/javascript",
                 "exec": [
                   "const email = 'postman_' + Date.now() + '@brewlite.vn';",
-                  "pm.environment.set('registeredCustomerEmail', email);"
+                  "pm.environment.set('registeredCustomerEmail', email); pm.collectionVariables.set('registeredCustomerEmail', email);"
                 ]
               }
             },
@@ -244,8 +274,8 @@
                   "    const j = safeJson();",
                   "    pm.expect(j).to.have.property('accessToken');",
                   "    pm.expect(j.user.role).to.eql('CUSTOMER');",
-                  "    pm.environment.set('registeredCustomerToken', j.accessToken);",
-                  "    pm.environment.set('registeredCustomerId', String(j.user.id));",
+                  "    pm.environment.set('registeredCustomerToken', j.accessToken); pm.collectionVariables.set('registeredCustomerToken', j.accessToken);",
+                  "    pm.environment.set('registeredCustomerId', String(j.user.id)); pm.collectionVariables.set('registeredCustomerId', String(j.user.id));",
                   "});",
                   "pm.test('Bcrypt Auth Hashing SLA: Response time < 1500ms', function () {",
                   "    pm.expect(pm.response.responseTime).to.be.below(1500);",
@@ -414,8 +444,8 @@
                   "    const j = safeJson();",
                   "    pm.expect(j).to.have.property('accessToken');",
                   "    pm.expect(j.user.role).to.eql('CUSTOMER');",
-                  "    pm.environment.set('customerToken', j.accessToken);",
-                  "    pm.environment.set('customerId', String(j.user.id));",
+                  "    pm.environment.set('customerToken', j.accessToken); pm.collectionVariables.set('customerToken', j.accessToken);",
+                  "    pm.environment.set('customerId', String(j.user.id)); pm.collectionVariables.set('customerId', String(j.user.id));",
                   "});",
                   "const maxMs = Number(pm.environment.get('max_response_time_ms') || pm.collectionVariables.get('max_response_time_ms') || 500);",
                   "pm.test('SLA Assignment 1 Sec 4.2: Response time < ' + maxMs + 'ms', function () {",
@@ -470,7 +500,7 @@
                   "    const j = safeJson();",
                   "    pm.expect(j).to.have.property('accessToken');",
                   "    pm.expect(j.user.role).to.eql('STAFF');",
-                  "    pm.environment.set('staffToken', j.accessToken);",
+                  "    pm.environment.set('staffToken', j.accessToken); pm.collectionVariables.set('staffToken', j.accessToken);",
                   "});",
                   "const maxMs = Number(pm.environment.get('max_response_time_ms') || pm.collectionVariables.get('max_response_time_ms') || 500);",
                   "pm.test('SLA Assignment 1 Sec 4.2: Response time < ' + maxMs + 'ms', function () {",
@@ -525,8 +555,8 @@
                   "    const j = safeJson();",
                   "    pm.expect(j).to.have.property('accessToken');",
                   "    pm.expect(j.user.role).to.eql('ADMIN');",
-                  "    pm.environment.set('adminToken', j.accessToken);",
-                  "    pm.environment.set('rootAdminId', String(j.user.id));",
+                  "    pm.environment.set('adminToken', j.accessToken); pm.collectionVariables.set('adminToken', j.accessToken);",
+                  "    pm.environment.set('rootAdminId', String(j.user.id)); pm.collectionVariables.set('rootAdminId', String(j.user.id));",
                   "});",
                   "const maxMs = Number(pm.environment.get('max_response_time_ms') || pm.collectionVariables.get('max_response_time_ms') || 500);",
                   "pm.test('SLA Assignment 1 Sec 4.2: Response time < ' + maxMs + 'ms', function () {",
@@ -581,7 +611,7 @@
                   "    const j = safeJson();",
                   "    pm.expect(j.status).to.eql('PENDING');",
                   "    pm.expect(j.orderId).to.be.a('number');",
-                  "    pm.environment.set('mvpOrderId', String(j.orderId));",
+                  "    pm.environment.set('mvpOrderId', String(j.orderId)); pm.collectionVariables.set('mvpOrderId', String(j.orderId));",
                   "});",
                   "const maxMs = Number(pm.environment.get('max_response_time_ms') || pm.collectionVariables.get('max_response_time_ms') || 500);",
                   "pm.test('SLA Assignment 1 Sec 4.2: Response time < ' + maxMs + 'ms', function () {",
@@ -645,7 +675,7 @@
                   "    const j = safeJson();",
                   "    pm.expect(j.success).to.eql(true);",
                   "    pm.expect(j.status).to.eql('PAID');",
-                  "    pm.environment.set('mvpPaymentId', String(j.paymentId));",
+                  "    pm.environment.set('mvpPaymentId', String(j.paymentId)); pm.collectionVariables.set('mvpPaymentId', String(j.paymentId));",
                   "});",
                   "const maxMs = Number(pm.environment.get('max_response_time_ms') || pm.collectionVariables.get('max_response_time_ms') || 500);",
                   "pm.test('SLA Assignment 1 Sec 4.2: Response time < ' + maxMs + 'ms', function () {",
@@ -1064,7 +1094,7 @@
                   "    pm.expect(j.status).to.eql('PENDING');",
                   "    pm.expect(j.discountCode).to.eql('BREW20');",
                   "    pm.expect(j.discountAmount).to.be.above(0);",
-                  "    pm.environment.set('idemOrderId', String(j.orderId));",
+                  "    pm.environment.set('idemOrderId', String(j.orderId)); pm.collectionVariables.set('idemOrderId', String(j.orderId));",
                   "});",
                   "const maxMs = Number(pm.environment.get('max_response_time_ms') || pm.collectionVariables.get('max_response_time_ms') || 500);",
                   "pm.test('SLA Assignment 1 Sec 4.2: Response time < ' + maxMs + 'ms', function () {",
@@ -1122,7 +1152,7 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.environment.set('idemTestKey', 'idem-replay-' + Date.now() + '-' + Math.floor(Math.random() * 99999));"
+                  "pm.environment.set('idemTestKey', 'idem-replay-' + Date.now() + '-' + Math.floor(Math.random() * 99999)); pm.collectionVariables.set('idemTestKey', 'idem-replay-' + Date.now() + '-' + Math.floor(Math.random() * 99999));"
                 ]
               }
             },
@@ -1138,7 +1168,7 @@
                   "    pm.expect(j.success).to.eql(true);",
                   "    pm.expect(j.status).to.eql('PAID');",
                   "    pm.expect(j.isIdempotent).to.not.eql(true);",
-                  "    pm.environment.set('idemPaymentId', String(j.paymentId));",
+                  "    pm.environment.set('idemPaymentId', String(j.paymentId)); pm.collectionVariables.set('idemPaymentId', String(j.paymentId));",
                   "});",
                   "const maxMs = Number(pm.environment.get('max_response_time_ms') || pm.collectionVariables.get('max_response_time_ms') || 500);",
                   "pm.test('SLA Assignment 1 Sec 4.2: Response time < ' + maxMs + 'ms', function () {",
@@ -1334,7 +1364,7 @@
                   "function safeJson() { try { return pm.response.json(); } catch (e) { return null; } }",
                   "pm.test('HTTP 201 & lưu failedOrderId', function () {",
                   "    pm.response.to.have.status(201);",
-                  "    pm.environment.set('failedOrderId', String(safeJson().orderId));",
+                  "    pm.environment.set('failedOrderId', String(safeJson().orderId)); pm.collectionVariables.set('failedOrderId', String(safeJson().orderId));",
                   "});",
                   "const maxMs = Number(pm.environment.get('max_response_time_ms') || pm.collectionVariables.get('max_response_time_ms') || 500);",
                   "pm.test('SLA Assignment 1 Sec 4.2: Response time < ' + maxMs + 'ms', function () {",
@@ -1510,7 +1540,7 @@
                   "function safeJson() { try { return pm.response.json(); } catch (e) { return null; } }",
                   "pm.test('HTTP 201 & lưu custCancelOrderId', function () {",
                   "    pm.response.to.have.status(201);",
-                  "    pm.environment.set('custCancelOrderId', String(safeJson().orderId));",
+                  "    pm.environment.set('custCancelOrderId', String(safeJson().orderId)); pm.collectionVariables.set('custCancelOrderId', String(safeJson().orderId));",
                   "});",
                   "const maxMs = Number(pm.environment.get('max_response_time_ms') || pm.collectionVariables.get('max_response_time_ms') || 500);",
                   "pm.test('SLA Assignment 1 Sec 4.2: Response time < ' + maxMs + 'ms', function () {",
@@ -1798,7 +1828,7 @@
                   "    pm.response.to.have.status(201);",
                   "    const j = safeJson();",
                   "    pm.expect(j.discountCode).to.eql('BREW10');",
-                  "    pm.environment.set('loyaltyOrderId', String(j.orderId));",
+                  "    pm.environment.set('loyaltyOrderId', String(j.orderId)); pm.collectionVariables.set('loyaltyOrderId', String(j.orderId));",
                   "});",
                   "const maxMs = Number(pm.environment.get('max_response_time_ms') || pm.collectionVariables.get('max_response_time_ms') || 500);",
                   "pm.test('SLA Assignment 1 Sec 4.2: Response time < ' + maxMs + 'ms', function () {",
@@ -2107,7 +2137,7 @@
                   "function safeJson() { try { return pm.response.json(); } catch (e) { return null; } }",
                   "pm.test('HTTP 201 & lưu tempStockIngId', function () {",
                   "    pm.response.to.have.status(201);",
-                  "    pm.environment.set('tempStockIngId', String(safeJson().id));",
+                  "    pm.environment.set('tempStockIngId', String(safeJson().id)); pm.collectionVariables.set('tempStockIngId', String(safeJson().id));",
                   "});",
                   "const maxMs = Number(pm.environment.get('max_response_time_ms') || pm.collectionVariables.get('max_response_time_ms') || 500);",
                   "pm.test('SLA Assignment 1 Sec 4.2: Response time < ' + maxMs + 'ms', function () {",
@@ -2169,7 +2199,7 @@
                   "function safeJson() { try { return pm.response.json(); } catch (e) { return null; } }",
                   "pm.test('HTTP 201 & lưu tempStockProdId', function () {",
                   "    pm.response.to.have.status(201);",
-                  "    pm.environment.set('tempStockProdId', String(safeJson().id));",
+                  "    pm.environment.set('tempStockProdId', String(safeJson().id)); pm.collectionVariables.set('tempStockProdId', String(safeJson().id));",
                   "});",
                   "const maxMs = Number(pm.environment.get('max_response_time_ms') || pm.collectionVariables.get('max_response_time_ms') || 500);",
                   "pm.test('SLA Assignment 1 Sec 4.2: Response time < ' + maxMs + 'ms', function () {",
@@ -2230,7 +2260,7 @@
                   "function safeJson() { try { return pm.response.json(); } catch (e) { return null; } }",
                   "pm.test('HTTP 201 & lưu tempStockRecipeId', function () {",
                   "    pm.response.to.have.status(201);",
-                  "    pm.environment.set('tempStockRecipeId', String(safeJson().id));",
+                  "    pm.environment.set('tempStockRecipeId', String(safeJson().id)); pm.collectionVariables.set('tempStockRecipeId', String(safeJson().id));",
                   "});",
                   "const maxMs = Number(pm.environment.get('max_response_time_ms') || pm.collectionVariables.get('max_response_time_ms') || 500);",
                   "pm.test('SLA Assignment 1 Sec 4.2: Response time < ' + maxMs + 'ms', function () {",
@@ -2495,7 +2525,7 @@
                   "function safeJson() { try { return pm.response.json(); } catch (e) { return null; } }",
                   "pm.test('HTTP 201 & lưu zaloConfirmOrderId', function () {",
                   "    pm.response.to.have.status(201);",
-                  "    pm.environment.set('zaloConfirmOrderId', String(safeJson().orderId));",
+                  "    pm.environment.set('zaloConfirmOrderId', String(safeJson().orderId)); pm.collectionVariables.set('zaloConfirmOrderId', String(safeJson().orderId));",
                   "});",
                   "const maxMs = Number(pm.environment.get('max_response_time_ms') || pm.collectionVariables.get('max_response_time_ms') || 500);",
                   "pm.test('SLA Assignment 1 Sec 4.2: Response time < ' + maxMs + 'ms', function () {",
@@ -2558,7 +2588,7 @@
                   "    pm.response.to.have.status(200);",
                   "    const j = safeJson();",
                   "    pm.expect(j).to.have.property('appTransId');",
-                  "    pm.environment.set('zaloConfirmAppTransId', String(j.appTransId));",
+                  "    pm.environment.set('zaloConfirmAppTransId', String(j.appTransId)); pm.collectionVariables.set('zaloConfirmAppTransId', String(j.appTransId));",
                   "});"
                 ]
               }
@@ -2840,7 +2870,7 @@
                   "function safeJson() { try { return pm.response.json(); } catch (e) { return null; } }",
                   "pm.test('HTTP 201 & lưu zaloCancelOrderId', function () {",
                   "    pm.response.to.have.status(201);",
-                  "    pm.environment.set('zaloCancelOrderId', String(safeJson().orderId));",
+                  "    pm.environment.set('zaloCancelOrderId', String(safeJson().orderId)); pm.collectionVariables.set('zaloCancelOrderId', String(safeJson().orderId));",
                   "});",
                   "const maxMs = Number(pm.environment.get('max_response_time_ms') || pm.collectionVariables.get('max_response_time_ms') || 500);",
                   "pm.test('SLA Assignment 1 Sec 4.2: Response time < ' + maxMs + 'ms', function () {",
@@ -2901,7 +2931,7 @@
                   "function safeJson() { try { return pm.response.json(); } catch (e) { return null; } }",
                   "pm.test('HTTP 200 & nhận appTransId Đơn B', function () {",
                   "    pm.response.to.have.status(200);",
-                  "    pm.environment.set('zaloCancelAppTransId', String(safeJson().appTransId || ''));",
+                  "    pm.environment.set('zaloCancelAppTransId', String(safeJson().appTransId || '')); pm.collectionVariables.set('zaloCancelAppTransId', String(safeJson().appTransId || ''));",
                   "});"
                 ]
               }
@@ -3185,7 +3215,7 @@
                   "    pm.response.to.have.status(201);",
                   "    const j = safeJson();",
                   "    pm.expect(j.id).to.be.a('number');",
-                  "    pm.environment.set('createdProductId', String(j.id));",
+                  "    pm.environment.set('createdProductId', String(j.id)); pm.collectionVariables.set('createdProductId', String(j.id));",
                   "});",
                   "const maxMs = Number(pm.environment.get('max_response_time_ms') || pm.collectionVariables.get('max_response_time_ms') || 500);",
                   "pm.test('SLA Assignment 1 Sec 4.2: Response time < ' + maxMs + 'ms', function () {",
@@ -3374,9 +3404,9 @@
                   "    const j = safeJson();",
                   "    const sp = j.sizePricing || j;",
                   "    pm.expect(sp).to.have.property('sizeM');",
-                  "    pm.environment.set('origSizeS', String(sp.sizeS ?? 0));",
-                  "    pm.environment.set('origSizeM', String(sp.sizeM ?? 5000));",
-                  "    pm.environment.set('origSizeL', String(sp.sizeL ?? 10000));",
+                  "    pm.environment.set('origSizeS', String(sp.sizeS ?? 0)); pm.collectionVariables.set('origSizeS', String(sp.sizeS ?? 0));",
+                  "    pm.environment.set('origSizeM', String(sp.sizeM ?? 5000)); pm.collectionVariables.set('origSizeM', String(sp.sizeM ?? 5000));",
+                  "    pm.environment.set('origSizeL', String(sp.sizeL ?? 10000)); pm.collectionVariables.set('origSizeL', String(sp.sizeL ?? 10000));",
                   "});",
                   "const maxMs = Number(pm.environment.get('max_response_time_ms') || pm.collectionVariables.get('max_response_time_ms') || 500);",
                   "pm.test('SLA Assignment 1 Sec 4.2: Response time < ' + maxMs + 'ms', function () {",
@@ -3537,9 +3567,9 @@
                   "    pm.response.to.have.status(200);",
                   "    const list = safeJson();",
                   "    pm.expect(list).to.be.an('array').that.is.not.empty;",
-                  "    pm.environment.set('restockTargetIngId', String(list[0].id));",
-                  "    pm.environment.set('restockOrigStock', String(list[0].stock));",
-                  "    pm.environment.set('restockOrigCost', String(list[0].costPerUnit ?? 0));",
+                  "    pm.environment.set('restockTargetIngId', String(list[0].id)); pm.collectionVariables.set('restockTargetIngId', String(list[0].id));",
+                  "    pm.environment.set('restockOrigStock', String(list[0].stock)); pm.collectionVariables.set('restockOrigStock', String(list[0].stock));",
+                  "    pm.environment.set('restockOrigCost', String(list[0].costPerUnit ?? 0)); pm.collectionVariables.set('restockOrigCost', String(list[0].costPerUnit ?? 0));",
                   "});",
                   "const maxMs = Number(pm.environment.get('max_response_time_ms') || pm.collectionVariables.get('max_response_time_ms') || 500);",
                   "pm.test('SLA Assignment 1 Sec 4.2: Response time < ' + maxMs + 'ms', function () {",
@@ -3587,7 +3617,7 @@
                   "function safeJson() { try { return pm.response.json(); } catch (e) { return null; } }",
                   "pm.test('HTTP 201 & lưu createdIngId', function () {",
                   "    pm.response.to.have.status(201);",
-                  "    pm.environment.set('createdIngId', String(safeJson().id));",
+                  "    pm.environment.set('createdIngId', String(safeJson().id)); pm.collectionVariables.set('createdIngId', String(safeJson().id));",
                   "});",
                   "const maxMs = Number(pm.environment.get('max_response_time_ms') || pm.collectionVariables.get('max_response_time_ms') || 500);",
                   "pm.test('SLA Assignment 1 Sec 4.2: Response time < ' + maxMs + 'ms', function () {",
@@ -3947,7 +3977,7 @@
                   "function safeJson() { try { return pm.response.json(); } catch (e) { return null; } }",
                   "pm.test('HTTP 201 & lưu createdRecipeId', function () {",
                   "    pm.response.to.have.status(201);",
-                  "    pm.environment.set('createdRecipeId', String(safeJson().id));",
+                  "    pm.environment.set('createdRecipeId', String(safeJson().id)); pm.collectionVariables.set('createdRecipeId', String(safeJson().id));",
                   "});",
                   "const maxMs = Number(pm.environment.get('max_response_time_ms') || pm.collectionVariables.get('max_response_time_ms') || 500);",
                   "pm.test('SLA Assignment 1 Sec 4.2: Response time < ' + maxMs + 'ms', function () {",
@@ -4121,7 +4151,7 @@
                   "function safeJson() { try { return pm.response.json(); } catch (e) { return null; } }",
                   "pm.test('HTTP 201 & lưu createdToppingId', function () {",
                   "    pm.response.to.have.status(201);",
-                  "    pm.environment.set('createdToppingId', String(safeJson().id));",
+                  "    pm.environment.set('createdToppingId', String(safeJson().id)); pm.collectionVariables.set('createdToppingId', String(safeJson().id));",
                   "});",
                   "const maxMs = Number(pm.environment.get('max_response_time_ms') || pm.collectionVariables.get('max_response_time_ms') || 500);",
                   "pm.test('SLA Assignment 1 Sec 4.2: Response time < ' + maxMs + 'ms', function () {",
@@ -4437,7 +4467,7 @@
                   "function safeJson() { try { return pm.response.json(); } catch (e) { return null; } }",
                   "pm.test('HTTP 201 & lưu createdVoucherId', function () {",
                   "    pm.response.to.have.status(201);",
-                  "    pm.environment.set('createdVoucherId', String(safeJson().id));",
+                  "    pm.environment.set('createdVoucherId', String(safeJson().id)); pm.collectionVariables.set('createdVoucherId', String(safeJson().id));",
                   "});",
                   "const maxMs = Number(pm.environment.get('max_response_time_ms') || pm.collectionVariables.get('max_response_time_ms') || 500);",
                   "pm.test('SLA Assignment 1 Sec 4.2: Response time < ' + maxMs + 'ms', function () {",
@@ -4713,7 +4743,7 @@
                   "    pm.response.to.have.status(201);",
                   "    const j = safeJson();",
                   "    const u = j.user || j.staff || j;",
-                  "    pm.environment.set('createdStaffId', String(u.id));",
+                  "    pm.environment.set('createdStaffId', String(u.id)); pm.collectionVariables.set('createdStaffId', String(u.id));",
                   "});",
                   "const maxMs = Number(pm.environment.get('max_response_time_ms') || pm.collectionVariables.get('max_response_time_ms') || 500);",
                   "pm.test('SLA Assignment 1 Sec 4.2: Response time < ' + maxMs + 'ms', function () {",
@@ -5050,7 +5080,7 @@
                   "    pm.response.to.have.status(201);",
                   "    const j = safeJson();",
                   "    const u = j.customer || j.user || j;",
-                  "    pm.environment.set('createdCustomerId', String(u.id));",
+                  "    pm.environment.set('createdCustomerId', String(u.id)); pm.collectionVariables.set('createdCustomerId', String(u.id));",
                   "});",
                   "const maxMs = Number(pm.environment.get('max_response_time_ms') || pm.collectionVariables.get('max_response_time_ms') || 500);",
                   "pm.test('SLA Assignment 1 Sec 4.2: Response time < ' + maxMs + 'ms', function () {",

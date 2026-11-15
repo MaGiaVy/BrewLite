@@ -30,6 +30,16 @@
       "key": "adminPassword",
       "value": "Admin@123",
       "type": "string"
+    },
+    {
+      "key": "customerEmail",
+      "value": "khach@brewlite.vn",
+      "type": "string"
+    },
+    {
+      "key": "customerPassword",
+      "value": "Password123",
+      "type": "string"
     }
   ],
   "item": [
