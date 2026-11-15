@@ -4,7 +4,6 @@ import {
   Delete,
   Get,
   Param,
-  ParseIntPipe,
   Patch,
   Post,
   UseGuards,
@@ -13,6 +12,8 @@ import { Role } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import { Roles } from '../auth/roles.decorator.js';
 import { RolesGuard } from '../auth/roles.guard.js';
+import { ParseInt32Pipe } from '../common/pipes/parse-int32.pipe.js';
+import { ToggleStatusDto } from '../common/dto/toggle-status.dto.js';
 import { CustomersService } from './customers.service.js';
 import { CreateCustomerDto } from './dto/create-customer.dto.js';
 import { UpdateCustomerDto } from './dto/update-customer.dto.js';
@@ -29,7 +30,7 @@ export class CustomersController {
   }
 
   @Get(':id')
-  getCustomerById(@Param('id', ParseIntPipe) id: number) {
+  getCustomerById(@Param('id', ParseInt32Pipe) id: number) {
     return this.customersService.getCustomerById(id);
   }
 
@@ -40,7 +41,7 @@ export class CustomersController {
 
   @Patch(':id')
   updateCustomer(
-    @Param('id', ParseIntPipe) id: number,
+    @Param('id', ParseInt32Pipe) id: number,
     @Body() dto: UpdateCustomerDto,
   ) {
     return this.customersService.updateCustomer(id, dto);
@@ -48,14 +49,14 @@ export class CustomersController {
 
   @Patch(':id/status')
   toggleCustomerStatus(
-    @Param('id', ParseIntPipe) id: number,
-    @Body('isActive') isActive: boolean,
+    @Param('id', ParseInt32Pipe) id: number,
+    @Body() dto: ToggleStatusDto,
   ) {
-    return this.customersService.toggleCustomerStatus(id, isActive);
+    return this.customersService.toggleCustomerStatus(id, dto.isActive);
   }
 
   @Delete(':id')
-  deleteCustomer(@Param('id', ParseIntPipe) id: number) {
+  deleteCustomer(@Param('id', ParseInt32Pipe) id: number) {
     return this.customersService.deleteCustomer(id);
   }
 }

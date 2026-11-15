@@ -9,6 +9,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import BrewLiteLogo from "../components/BrewLiteLogo";
 import { useAuthStore, apiFetch } from "../store/authStore";
+import { getProductUnitLabel, isBakeryProduct } from "../store/cartStore";
 
 interface Ingredient {
   id: number;
@@ -1148,7 +1149,7 @@ export default function AdminPortalPage() {
           amount: numAmt,
           price: numPrice,
           toppingName: rawName !== undefined ? rawName.trim() : tr.toppingName,
-          subtext: rawSubtext !== undefined ? rawSubtext.trim() : tr.subtext,
+          subtext: rawSubtext !== undefined ? rawSubtext.trim() : tr.subtext ?? undefined,
           isActive: overrideActive !== undefined ? overrideActive : tr.isActive !== false,
         }),
       });
@@ -2115,7 +2116,7 @@ export default function AdminPortalPage() {
                                   {prod.basePrice.toLocaleString("vi-VN")}đ
                                 </span>
                                 <span className="text-[11px] font-semibold text-[#7A6A5E]">
-                                  • Đã bán: {prod.orderItemsCount ?? 0} ly
+                                  • Đã bán: {prod.orderItemsCount ?? 0} {getProductUnitLabel(prod)}
                                 </span>
                               </div>
 
@@ -2135,8 +2136,8 @@ export default function AdminPortalPage() {
                                   </span>
                                 ) : (
                                   <span className="px-2 py-0.5 rounded-md bg-[#DCFCE7] text-[#166534] text-[10px] font-bold">
-                                    ✅ Pha được ~{prod.availableServings ?? 99}{" "}
-                                    ly
+                                    {isBakeryProduct(prod) ? "✅ Phục vụ" : "✅ Pha được"} ~{prod.availableServings ?? 99}{" "}
+                                    {getProductUnitLabel(prod)}
                                   </span>
                                 )}
                               </div>
@@ -3507,7 +3508,7 @@ export default function AdminPortalPage() {
                         🏆 Bảng Xếp Hạng Món Bán Chạy Nhất (Best-Sellers)
                       </h2>
                       <p className="text-xs text-[#7A6A5E]">
-                        Thống kê theo tổng số lượng ly đã bán từ các đơn hàng
+                        Thống kê theo tổng số lượng đã bán từ các đơn hàng
                         thành công
                       </p>
                     </div>
@@ -3550,10 +3551,14 @@ export default function AdminPortalPage() {
                               </div>
                               <div className="text-right">
                                 <span className="text-[#9E5A2B] font-extrabold">
-                                  {item.totalQuantity} ly
+                                  {item.totalQuantity}{" "}
+                                  {getProductUnitLabel({
+                                    name: item.productName,
+                                    category: products.find((p) => p.id === item.productId)?.category,
+                                  })}
                                 </span>
                                 <span className="text-[#7A6A5E] ml-2">
-                                  ({item.totalRevenue.toLocaleString("vi-VN")}đ)
+                                  ({item.totalRevenue.toLocaleString("vi-VN")}đ trước giảm)
                                 </span>
                               </div>
                             </div>
@@ -4690,8 +4695,14 @@ export default function AdminPortalPage() {
                   </p>
                   <p>
                     • Lịch sử đơn hàng đã mua món này (
-                    <strong>{deleteTarget.ordersCount ?? 0} ly</strong>) vẫn được
-                    giữ nguyên tên &amp; giá trong hóa đơn cũ để bảo toàn báo cáo
+                    <strong>
+                      {deleteTarget.ordersCount ?? 0}{" "}
+                      {getProductUnitLabel({
+                        name: deleteTarget.name,
+                        category: products.find((p) => p.id === deleteTarget.id)?.category,
+                      })}
+                    </strong>
+                    ) vẫn được giữ nguyên tên &amp; giá trong hóa đơn cũ để bảo toàn báo cáo
                     doanh thu.
                   </p>
                 </>

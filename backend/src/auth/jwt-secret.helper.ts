@@ -10,12 +10,25 @@
  * Trên môi trường Dev / Test:
  * - Ưu tiên lấy JWT_SECRET nếu có, nếu không thì fallback về secret dev an toàn cho test runner.
  */
+const WEAK_DEFAULT_SECRETS = new Set([
+  'brewlite_secret_key',
+  'brewlite-super-secret-jwt-key-change-in-prod',
+  'change-me-to-a-random-64-char-hex-secret',
+  'secret',
+  'changeme',
+  'your-secret-key',
+]);
+
 export function getJwtSecret(): string {
-  const secret = process.env.JWT_SECRET;
+  const secret = process.env.JWT_SECRET?.trim();
   const isProduction = process.env.NODE_ENV === 'production';
 
   if (isProduction) {
-    if (!secret || secret === 'brewlite_secret_key') {
+    if (
+      !secret ||
+      WEAK_DEFAULT_SECRETS.has(secret) ||
+      secret.length < 16
+    ) {
       throw new Error(
         'FATAL SECURITY CONFIGURATION: process.env.JWT_SECRET must be configured with a secure key in production!',
       );

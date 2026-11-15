@@ -1,3 +1,5 @@
+import { findExactToppingGroup } from './topping.helper.js';
+
 export interface RequiredIngredientItem {
   ingredientId: number;
   code: string;
@@ -20,7 +22,7 @@ export async function computeRequiredIngredients(
   items: Array<{
     productId: number;
     size: string;
-    toppings: string[];
+    toppings?: string[];
     quantity: number;
   }>,
 ): Promise<RequiredIngredientItem[]> {
@@ -128,7 +130,10 @@ export async function computeRequiredIngredients(
       const hasBoba =
         Array.isArray(item.toppings) &&
         item.toppings.some((topStr: string) => {
-          const low = topStr.toLowerCase();
+          const group = findExactToppingGroup(toppingRecipes, topStr);
+          const low = (
+            group ? `${group.toppingId} ${group.toppingName}` : topStr
+          ).toLowerCase();
           return (
             low.includes('boba') ||
             low.includes('trân châu') ||
@@ -142,17 +147,11 @@ export async function computeRequiredIngredients(
       }
     }
 
-    // Tính nguyên liệu cho Toppings đi kèm
+    // Tính nguyên liệu cho Toppings đi kèm theo helper khớp chính xác (không fallback / không substring mơ hồ)
     if (Array.isArray(item.toppings) && item.toppings.length > 0) {
       for (const topStr of item.toppings) {
-        const lowerTop = topStr.toLowerCase();
-        const matchedTops = toppingRecipes.filter(
-          (tr: any) =>
-            tr.toppingId.toLowerCase() === lowerTop ||
-            tr.toppingName.toLowerCase().includes(lowerTop) ||
-            lowerTop.includes(tr.toppingName.toLowerCase()),
-        );
-        for (const tr of matchedTops) {
+        const matchedGroup = findExactToppingGroup(toppingRecipes, topStr);
+        for (const tr of matchedGroup?.rows ?? []) {
           addRequirement(tr.ingredient, tr.amount * item.quantity, true);
         }
       }

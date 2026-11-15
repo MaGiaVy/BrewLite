@@ -4,7 +4,7 @@
 set -e
 
 echo "⏳ Đồng bộ schema Prisma (db push)..."
-npx prisma db push --accept-data-loss
+npx prisma db push
 
 echo "🌱 Seed dữ liệu mẫu (10 món, 15 nguyên liệu, BOM Recipes & 3 tài khoản RBAC)..."
 npx prisma db seed

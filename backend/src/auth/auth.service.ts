@@ -13,6 +13,7 @@ import { RegisterDto } from './dto/register.dto.js';
 import { LoginDto } from './dto/login.dto.js';
 import { UpdateProfileDto } from './dto/update-profile.dto.js';
 import type { JwtPayload } from './jwt.strategy.js';
+import { containsUnsafeHtml } from '../common/validators/no-unsafe-html.validator.js';
 
 const SALT_ROUNDS = 10;
 
@@ -97,7 +98,8 @@ export class AuthService {
   // ─── Register ────────────────────────────────────────────────────────────────
 
   async register(dto: RegisterDto) {
-    if (!dto.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(dto.email)) {
+    const normalizedEmail = (dto.email || '').trim().toLowerCase();
+    if (!normalizedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
       throw new BadRequestException('Email không hợp lệ');
     }
     if (!dto.password || dto.password.length < 6) {
@@ -106,8 +108,11 @@ export class AuthService {
     if (!dto.fullName || !dto.fullName.trim()) {
       throw new BadRequestException('Họ và tên không được để trống');
     }
+    if (containsUnsafeHtml(dto.fullName) || (dto.phone && containsUnsafeHtml(dto.phone))) {
+      throw new BadRequestException('Thông tin chứa ký tự HTML không hợp lệ');
+    }
     const existing = await this.prisma.user.findUnique({
-      where: { email: dto.email },
+      where: { email: normalizedEmail },
     });
     if (existing) {
       throw new ConflictException(
@@ -119,10 +124,10 @@ export class AuthService {
 
     const user = await this.prisma.user.create({
       data: {
-        email: dto.email,
+        email: normalizedEmail,
         passwordHash,
-        fullName: dto.fullName,
-        phone: dto.phone ?? null,
+        fullName: dto.fullName.trim(),
+        phone: dto.phone?.trim() ?? null,
         position: null,
         role: Role.CUSTOMER,
       },
@@ -132,6 +137,7 @@ export class AuthService {
       sub: user.id,
       email: user.email,
       role: user.role,
+      tokenVersion: (user as any).tokenVersion ?? 0,
     };
     const accessToken = this.jwtService.sign(payload);
 
@@ -144,8 +150,9 @@ export class AuthService {
   // ─── Login ───────────────────────────────────────────────────────────────────
 
   async login(dto: LoginDto) {
+    const normalizedEmail = (dto.email || '').trim().toLowerCase();
     const user = await this.prisma.user.findUnique({
-      where: { email: dto.email },
+      where: { email: normalizedEmail },
     });
 
     if (!user) {
@@ -171,6 +178,7 @@ export class AuthService {
       sub: user.id,
       email: user.email,
       role: user.role,
+      tokenVersion: (user as any).tokenVersion ?? 0,
     };
     const accessToken = this.jwtService.sign(payload);
 
@@ -206,6 +214,18 @@ export class AuthService {
       throw new NotFoundException('User không tồn tại');
     }
 
+    if (dto.fullName !== undefined) {
+      if (!dto.fullName.trim()) {
+        throw new BadRequestException('Họ và tên không được để trống');
+      }
+      if (containsUnsafeHtml(dto.fullName)) {
+        throw new BadRequestException('Họ và tên không được chứa mã HTML không an toàn');
+      }
+    }
+    if (dto.phone !== undefined && containsUnsafeHtml(dto.phone)) {
+      throw new BadRequestException('Số điện thoại không được chứa mã HTML không an toàn');
+    }
+
     let newPasswordHash: string | undefined;
 
     if (dto.newPassword) {
@@ -232,6 +252,7 @@ export class AuthService {
         fullName: dto.fullName?.trim(),
         phone: dto.phone?.trim(),
         passwordHash: newPasswordHash,
+        ...(newPasswordHash ? { tokenVersion: { increment: 1 } } : {}),
       },
       select: {
         id: true,
@@ -282,52 +303,50 @@ export class AuthService {
       throw new NotFoundException('User không tồn tại');
     }
 
-    let catalogEntry: VoucherCatalogItem | undefined;
+    const rawCode =
+      voucherCode === undefined || voucherCode === null
+        ? ''
+        : typeof voucherCode === 'string'
+          ? voucherCode
+          : voucherCode.code;
+
+    if (!rawCode || typeof rawCode !== 'string' || !rawCode.trim()) {
+      throw new BadRequestException('Mã voucher đổi thưởng không hợp lệ');
+    }
+
+    const cleanCode = rawCode.trim().toUpperCase();
+    const catalogEntry = VOUCHER_CATALOG[cleanCode];
     let dbVoucher: any = null;
-    let cleanCode: string | null = null;
-    let effectivePointsToDeduct = points;
 
-    if (voucherCode !== undefined && voucherCode !== null) {
-      const rawCode =
-        typeof voucherCode === 'string' ? voucherCode : voucherCode.code;
-
-      if (rawCode && typeof rawCode === 'string' && rawCode.trim()) {
-        cleanCode = rawCode.trim().toUpperCase();
-        catalogEntry = VOUCHER_CATALOG[cleanCode];
-
-        if (!catalogEntry && (this.prisma as any).discountCode?.findUnique) {
-          try {
-            dbVoucher = await (this.prisma as any).discountCode.findUnique({
-              where: { code: cleanCode },
-            });
-          } catch {
-            dbVoucher = null;
-          }
-        }
-
-        if (!catalogEntry && !dbVoucher) {
-          throw new BadRequestException('Mã voucher đổi thưởng không hợp lệ');
-        }
-
-        if (!catalogEntry && dbVoucher && dbVoucher.isActive === false) {
-          throw new BadRequestException(
-            'Mã voucher đổi thưởng hiện đang tạm ngưng áp dụng',
-          );
-        }
-
-        const requiredPoints = catalogEntry
-          ? catalogEntry.requiredPoints
-          : Math.max(1, Math.round(dbVoucher.discountPercent) || 10);
-
-        if (points < requiredPoints) {
-          throw new BadRequestException('Số Hạt Vàng không đủ để đổi mã này');
-        }
-
-        effectivePointsToDeduct = requiredPoints;
-      } else {
-        throw new BadRequestException('Mã voucher đổi thưởng không hợp lệ');
+    if ((this.prisma as any).discountCode?.findUnique) {
+      try {
+        dbVoucher = await (this.prisma as any).discountCode.findUnique({
+          where: { code: cleanCode },
+        });
+      } catch {
+        dbVoucher = null;
       }
     }
+
+    if (!catalogEntry && !dbVoucher) {
+      throw new BadRequestException('Mã voucher đổi thưởng không hợp lệ');
+    }
+
+    if (dbVoucher && dbVoucher.isActive === false) {
+      throw new BadRequestException(
+        'Mã voucher đổi thưởng hiện đang tạm ngưng áp dụng',
+      );
+    }
+
+    const requiredPoints = catalogEntry
+      ? catalogEntry.requiredPoints
+      : Math.max(1, Math.round(dbVoucher.discountPercent) || 10);
+
+    if (points < requiredPoints) {
+      throw new BadRequestException('Số Hạt Vàng không đủ để đổi mã này');
+    }
+
+    const effectivePointsToDeduct = requiredPoints;
 
     if (user.loyaltyPoints < effectivePointsToDeduct) {
       throw new BadRequestException(
@@ -370,13 +389,13 @@ export class AuthService {
       let userVoucher = null;
       if (cleanCode) {
         const effectivePercent =
-          catalogEntry?.discountPercent ?? dbVoucher?.discountPercent ?? 10;
+          dbVoucher?.discountPercent ?? catalogEntry?.discountPercent ?? 10;
         const effectiveMax =
-          catalogEntry?.maxDiscountAmount ??
-          dbVoucher?.maxDiscountAmount ??
-          null;
+          dbVoucher?.maxDiscountAmount !== undefined
+            ? dbVoucher.maxDiscountAmount
+            : (catalogEntry?.maxDiscountAmount ?? null);
         const effectiveMin =
-          catalogEntry?.minOrderAmount ?? dbVoucher?.minOrderAmount ?? 0;
+          dbVoucher?.minOrderAmount ?? catalogEntry?.minOrderAmount ?? 0;
 
         const existing = await (tx as any).userVoucher.findUnique({
           where: {

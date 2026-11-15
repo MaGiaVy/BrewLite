@@ -21,12 +21,11 @@ export function resolveDefaultMaxDiscount(code: string, discountPercent: number)
 import {
   ConflictException,
   Injectable,
-  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { OrderStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { expirePendingOrders } from '../orders/order-refund.helper.js';
+import { findExactToppingGroup } from '../orders/topping.helper.js';
 import {
   CreateIngredientDto,
   CreateToppingRecipeDto,
@@ -68,11 +67,9 @@ export async function fetchGlobalSizePricing(prisma: any) {
 
 @Injectable()
 export class InventoryService {
-  private readonly logger = new Logger(InventoryService.name);
-
   constructor(private readonly prisma: PrismaService) {}
 
-  private formatIngredient(ing: any) {
+  private formatIngredient(ing: any, includeCost = true) {
     if (!ing) return ing;
     const stock = Number(ing.stock ?? 0);
     const minThreshold = Number(ing.minThreshold ?? 0);
@@ -86,15 +83,15 @@ export class InventoryService {
     const percentage = Math.min(100, Math.round((stock / maxRef) * 100));
     const costPerUnit = Number(ing.costPerUnit || 0);
     const totalInventoryValue = Math.round(stock * costPerUnit);
+    const { costPerUnit: _cpu, ...safeIng } = ing;
 
     return {
-      ...ing,
+      ...(includeCost ? ing : safeIng),
       stock,
       minThreshold,
       type: ing.type || 'INGREDIENT',
       isRequiredForSale: ing.isRequiredForSale ?? true,
-      costPerUnit,
-      totalInventoryValue,
+      ...(includeCost ? { costPerUnit, totalInventoryValue } : {}),
       status,
       percentage,
       recipesCount: Array.isArray(ing.recipes) ? ing.recipes.length : 0,
@@ -163,7 +160,7 @@ export class InventoryService {
     };
   }
 
-  async getAllIngredients() {
+  async getAllIngredients(includeCost = true) {
     try {
       const list = await this.prisma.ingredient.findMany({
         include: {
@@ -174,9 +171,9 @@ export class InventoryService {
         orderBy: { id: 'asc' },
       });
       if (Array.isArray(list)) {
-        return list.map((ing) => this.formatIngredient(ing));
+        return list.map((ing) => this.formatIngredient(ing, includeCost));
       }
-    } catch (err: any) {
+    } catch {
       // Fallback nếu CSDL local chưa chạy migrate mới nhất (thiếu cột type, isRequiredForSale...)
       try {
         if (typeof (this.prisma as any).$queryRaw === 'function') {
@@ -186,10 +183,10 @@ export class InventoryService {
             ORDER BY id ASC
           `;
           if (Array.isArray(rawList)) {
-            return rawList.map((ing) => this.formatIngredient(ing));
+            return rawList.map((ing) => this.formatIngredient(ing, includeCost));
           }
         }
-      } catch (rawErr) {
+      } catch {
         // Raw query fallback failed
       }
     }
@@ -231,6 +228,15 @@ export class InventoryService {
     let cleanCode: string | undefined;
     if (dto.code !== undefined) {
       cleanCode = dto.code.trim().toUpperCase().replace(/\s+/g, '_');
+      if (
+        typeof current.code === 'string' &&
+        current.code.startsWith('PKG_') &&
+        cleanCode !== current.code
+      ) {
+        throw new ConflictException(
+          `Không thể đổi mã của vật tư bao bì hệ thống "${current.code}".`,
+        );
+      }
       if (cleanCode !== current.code) {
         const dup = await this.prisma.ingredient.findUnique({
           where: { code: cleanCode },
@@ -285,6 +291,12 @@ export class InventoryService {
     });
     if (!current) {
       throw new NotFoundException(`Không tìm thấy nguyên vật liệu #${id}`);
+    }
+
+    if (typeof current.code === 'string' && current.code.startsWith('PKG_')) {
+      throw new ConflictException(
+        `Không thể xóa vật tư bao bì hệ thống "${current.code}".`,
+      );
     }
 
     const count = await this.prisma.recipe.count({ where: { ingredientId: id } });
@@ -457,12 +469,12 @@ export class InventoryService {
     if (!(this.prisma as any).inventoryLog?.findMany) return [];
     return (this.prisma as any).inventoryLog.findMany({
       orderBy: { createdAt: 'desc' },
-      take: 80,
     });
   }
 
-  async getRecipeMatrix() {
+  async getRecipeMatrix(includeSensitive = true) {
     const products = await this.prisma.product.findMany({
+      ...(includeSensitive ? {} : { where: { isActive: true } }),
       include: {
         recipes: {
           include: {
@@ -475,15 +487,40 @@ export class InventoryService {
     });
 
     const toppingRecipes = await this.prisma.toppingRecipe.findMany({
+      ...(includeSensitive ? {} : { where: { isActive: true } }),
       include: {
         ingredient: true,
       },
       orderBy: { id: 'asc' },
     });
 
+    if (includeSensitive) {
+      return {
+        products,
+        toppingRecipes,
+      };
+    }
+
+    const sanitizeIngredient = (ing: any) => {
+      if (!ing) return ing;
+      const { costPerUnit: _cpu, ...rest } = ing;
+      return rest;
+    };
+
     return {
-      products,
-      toppingRecipes,
+      products: (products || []).map((p: any) => ({
+        ...p,
+        recipes: Array.isArray(p.recipes)
+          ? p.recipes.map((r: any) => ({
+              ...r,
+              ingredient: sanitizeIngredient(r.ingredient),
+            }))
+          : [],
+      })),
+      toppingRecipes: (toppingRecipes || []).map((tr: any) => ({
+        ...tr,
+        ingredient: sanitizeIngredient(tr.ingredient),
+      })),
     };
   }
 
@@ -561,6 +598,10 @@ export class InventoryService {
   // ─── TOPPING FULL CRUD & PRICING ───────────────────────────────────────────
   async createToppingRecipe(dto: CreateToppingRecipeDto) {
     const cleanId = dto.toppingId.trim().toLowerCase().replace(/\s+/g, '_');
+    const cleanName = dto.toppingName.trim();
+    const cleanSubtext = dto.subtext?.trim() || 'Topping thơm ngon chuẩn vị';
+    const cleanActive = dto.isActive ?? true;
+
     const ing = await this.prisma.ingredient.findUnique({
       where: { id: dto.ingredientId },
     });
@@ -568,6 +609,19 @@ export class InventoryService {
       throw new NotFoundException(
         `Không tìm thấy nguyên vật liệu #${dto.ingredientId}`,
       );
+    }
+
+    // Đồng bộ tên/mô tả/giá/trạng thái nếu toppingId đã có nhiều thành phần (ví dụ: cream)
+    if (typeof (this.prisma.toppingRecipe as any).updateMany === 'function') {
+      await (this.prisma.toppingRecipe as any).updateMany({
+        where: { toppingId: cleanId },
+        data: {
+          toppingName: cleanName,
+          subtext: cleanSubtext,
+          price: dto.price,
+          isActive: cleanActive,
+        },
+      });
     }
 
     return this.prisma.toppingRecipe.upsert({
@@ -578,18 +632,18 @@ export class InventoryService {
         },
       },
       update: {
-        toppingName: dto.toppingName.trim(),
-        subtext: dto.subtext?.trim() || 'Topping thơm ngon chuẩn vị',
+        toppingName: cleanName,
+        subtext: cleanSubtext,
         price: dto.price,
-        isActive: dto.isActive ?? true,
+        isActive: cleanActive,
         amount: dto.amount,
       },
       create: {
         toppingId: cleanId,
-        toppingName: dto.toppingName.trim(),
-        subtext: dto.subtext?.trim() || 'Topping thơm ngon chuẩn vị',
+        toppingName: cleanName,
+        subtext: cleanSubtext,
         price: dto.price,
-        isActive: dto.isActive ?? true,
+        isActive: cleanActive,
         ingredientId: dto.ingredientId,
         amount: dto.amount,
       },
@@ -655,8 +709,27 @@ export class InventoryService {
     if (!existing) {
       throw new NotFoundException(`Không tìm thấy Topping #${id}`);
     }
-    await (this.prisma.toppingRecipe as any).delete({ where: { id } });
-    return { deleted: true, id, toppingName: existing.toppingName };
+
+    let deletedCount = 1;
+    if (
+      existing.toppingId &&
+      typeof (this.prisma.toppingRecipe as any).deleteMany === 'function'
+    ) {
+      const res = await (this.prisma.toppingRecipe as any).deleteMany({
+        where: { toppingId: existing.toppingId },
+      });
+      deletedCount = Number(res?.count ?? 1);
+    } else {
+      await (this.prisma.toppingRecipe as any).delete({ where: { id } });
+    }
+
+    return {
+      deleted: true,
+      id,
+      toppingId: existing.toppingId,
+      toppingName: existing.toppingName,
+      deletedCount,
+    };
   }
 
   // ─── GLOBAL SIZE PRICING & PUBLIC PRICING CONFIG ──────────────────────────
@@ -747,11 +820,12 @@ export class InventoryService {
     }
 
     const allToppingsList = Array.from(toppingMap.values());
-    const drinkToppings = allToppingsList.filter(
-      (t) => !t.id.startsWith('bakery_') && t.isActive,
+    const activeToppings = allToppingsList.filter((t) => t.isActive);
+    const drinkToppings = activeToppings.filter(
+      (t) => !t.id.startsWith('bakery_'),
     );
-    const dbBakeryToppings = allToppingsList.filter(
-      (t) => t.id.startsWith('bakery_') && t.isActive,
+    const dbBakeryToppings = activeToppings.filter((t) =>
+      t.id.startsWith('bakery_'),
     );
 
     const defaultBakeryToppings = [
@@ -813,52 +887,37 @@ export class InventoryService {
 
     // Bảo mật INV-03: Loại bỏ trường giá vốn cogs khỏi API Public để không rò rỉ bí mật kinh doanh
     const sanitizeTopping = (t: any) => {
-      const { cogs, ...publicData } = t;
+      const { cogs: _cogs, ...publicData } = t;
       return publicData;
     };
+
+    const publicVouchers = (vouchers || []).map((v: any) => ({
+      id: v.id,
+      code: v.code,
+      description: v.description,
+      discountPercent: v.discountPercent,
+      minOrderAmount: v.minOrderAmount,
+      maxDiscountAmount: v.maxDiscountAmount,
+      isActive: v.isActive,
+    }));
 
     return {
       sizePricing,
       toppings: drinkToppings.map(sanitizeTopping),
-      allToppings: allToppingsList.map(sanitizeTopping),
+      allToppings: activeToppings.map(sanitizeTopping),
       bakeryToppings: bakeryToppings.map(sanitizeTopping),
       bakeryServingStyles,
-      vouchers,
+      vouchers: publicVouchers,
     };
   }
 
   // ─── VOUCHERS / DISCOUNT CODES CRUD ────────────────────────────────────────
   async getAllVouchers(onlyActive = false) {
     if (!(this.prisma as any).discountCode?.findMany) return [];
-    const list = await (this.prisma as any).discountCode.findMany({
+    return (this.prisma as any).discountCode.findMany({
       ...(onlyActive ? { where: { isActive: true } } : {}),
       orderBy: { id: 'asc' },
     });
-
-    // Tự động bổ sung mức giảm tối đa cố định chuẩn nếu chưa được cấu hình
-    const updated = await Promise.all(
-      list.map(async (v: any) => {
-        if (
-          v.maxDiscountAmount === null ||
-          v.maxDiscountAmount === undefined ||
-          Number(v.maxDiscountAmount) <= 0
-        ) {
-          const cap = resolveDefaultMaxDiscount(v.code, Number(v.discountPercent || 0));
-          try {
-            await (this.prisma as any).discountCode.update({
-              where: { id: v.id },
-              data: { maxDiscountAmount: cap },
-            });
-          } catch {
-            // bỏ qua nếu lỗi cập nhật bất đồng bộ
-          }
-          return { ...v, maxDiscountAmount: cap };
-        }
-        return v;
-      }),
-    );
-
-    return updated;
   }
 
   async createVoucher(dto: CreateVoucherDto) {
@@ -875,9 +934,7 @@ export class InventoryService {
       Number(dto.discountPercent || 0),
     );
     const effectiveMaxDiscount =
-      dto.maxDiscountAmount !== undefined &&
-      dto.maxDiscountAmount !== null &&
-      Number(dto.maxDiscountAmount) > 0
+      dto.maxDiscountAmount !== undefined && dto.maxDiscountAmount !== null
         ? Number(dto.maxDiscountAmount)
         : defaultCap;
 
@@ -907,17 +964,10 @@ export class InventoryService {
       cleanCode = dto.code.trim().toUpperCase().replace(/\s+/g, '');
     }
 
-    const defaultCap = resolveDefaultMaxDiscount(
-      cleanCode || existing.code,
-      Number(dto.discountPercent ?? existing.discountPercent ?? 0),
-    );
-
-    let maxDiscountAmountToSave: number | undefined;
+    let maxDiscountAmountToSave: number | null | undefined;
     if (dto.maxDiscountAmount !== undefined) {
       maxDiscountAmountToSave =
-        dto.maxDiscountAmount !== null && Number(dto.maxDiscountAmount) > 0
-          ? Number(dto.maxDiscountAmount)
-          : defaultCap;
+        dto.maxDiscountAmount === null ? null : Number(dto.maxDiscountAmount);
     }
 
     return (this.prisma as any).discountCode.update({
@@ -953,35 +1003,61 @@ export class InventoryService {
   }
 
   async getDashboardStats() {
-    await expirePendingOrders(this.prisma, this.logger);
-
     const sevenDaysAgo = new Date();
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
     sevenDaysAgo.setHours(0, 0, 0, 0);
 
-    const [ingredients, orders, sizePricing, vouchers, logs, allRecipes] =
-      await Promise.all([
-        this.getAllIngredients(),
-        this.prisma.order.findMany({
-          where: { createdAt: { gte: sevenDaysAgo } },
-          include: {
-            items: true,
-            user: {
-              select: { id: true, email: true, fullName: true, phone: true },
-            },
+    const [
+      ingredients,
+      orders,
+      sizePricing,
+      vouchers,
+      logs,
+      allRecipes,
+      allToppingRecipes,
+      allProducts,
+    ] = await Promise.all([
+      this.getAllIngredients(true),
+      this.prisma.order.findMany({
+        where: { createdAt: { gte: sevenDaysAgo } },
+        include: {
+          items: true,
+          user: {
+            select: { id: true, email: true, fullName: true, phone: true },
           },
-          orderBy: { createdAt: 'desc' },
-          take: 1000,
-        }),
-        this.getGlobalSizePricing(),
-        this.getAllVouchers(false),
-        this.getInventoryLogs(),
-        (this.prisma as any).recipe?.findMany
-          ? (this.prisma as any).recipe.findMany({
-              include: { ingredient: true },
-            })
-          : Promise.resolve([]),
-      ]);
+        },
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.getGlobalSizePricing(),
+      this.getAllVouchers(false),
+      this.getInventoryLogs(),
+      (this.prisma as any).recipe?.findMany
+        ? (this.prisma as any).recipe.findMany({
+            include: { ingredient: true },
+          })
+        : Promise.resolve([]),
+      (this.prisma as any).toppingRecipe?.findMany
+        ? (this.prisma as any).toppingRecipe.findMany({
+            include: { ingredient: true },
+          })
+        : Promise.resolve([]),
+      (this.prisma as any).product?.findMany
+        ? (this.prisma as any).product.findMany({
+            select: { id: true, category: true },
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const pkgCostMap = new Map<string, number>();
+    for (const ing of ingredients || []) {
+      if (typeof ing?.code === 'string' && ing.code.startsWith('PKG_')) {
+        pkgCostMap.set(ing.code, Number(ing.costPerUnit || 0));
+      }
+    }
+    const productCategoryMap = new Map<number, string>();
+    for (const p of allProducts || []) {
+      productCategoryMap.set(p.id, p.category);
+    }
 
     const revenueStatuses: OrderStatus[] = [
       OrderStatus.PAID,
@@ -995,9 +1071,14 @@ export class InventoryService {
     );
 
     const totalRevenue = validOrders.reduce((sum, o) => sum + o.totalAmount, 0);
+    const totalDiscountAmount = validOrders.reduce(
+      (sum, o) => sum + Number((o as any).discountAmount || 0),
+      0,
+    );
 
-    // Tính tổng Giá vốn hàng bán (Total COGS) từ các đơn hàng thành công
+    // Tính tổng Giá vốn hàng bán (Total COGS) gồm công thức món + topping + bao bì phụ trợ
     let totalCogsSold = 0;
+    let totalGrossRevenue = 0;
     const productStatsMap: Record<
       number,
       {
@@ -1012,6 +1093,8 @@ export class InventoryService {
 
     for (const order of validOrders) {
       if (!Array.isArray(order.items)) continue;
+      let orderDrinkCups = 0;
+
       for (const item of order.items) {
         const sz = (item.size || 'M').toUpperCase();
         const itemRecipes = Array.isArray(allRecipes)
@@ -1021,13 +1104,64 @@ export class InventoryService {
                 (r.size === sz || r.size === 'ALL'),
             )
           : [];
-        const unitCogs = itemRecipes.reduce(
+        let unitCogs = itemRecipes.reduce(
           (s: number, r: any) =>
             s + Number(r.amount || 0) * Number(r.ingredient?.costPerUnit || 0),
           0,
         );
+
+        // Cộng COGS nguyên liệu của từng topping đi kèm
+        if (Array.isArray(item.toppings) && Array.isArray(allToppingRecipes)) {
+          for (const topStr of item.toppings) {
+            const matchedGroup = findExactToppingGroup(
+              allToppingRecipes,
+              topStr,
+              { includeInactive: true },
+            );
+            if (matchedGroup) {
+              for (const tr of matchedGroup.rows) {
+                unitCogs +=
+                  Number(tr.amount || 0) *
+                  Number(tr.ingredient?.costPerUnit || 0);
+              }
+            }
+          }
+        }
+
+        const prodCat = productCategoryMap.get(item.productId);
+        const isBakery =
+          prodCat === 'bakery' ||
+          itemRecipes.some(
+            (r: any) =>
+              r.ingredient?.code?.startsWith('ING_PAIN') ||
+              r.ingredient?.code?.startsWith('ING_CHEESE') ||
+              r.ingredient?.code?.startsWith('ING_TIRAMISU'),
+          );
+
+        if (isBakery) {
+          unitCogs += pkgCostMap.get('PKG_SPOON') ?? 0;
+        } else {
+          orderDrinkCups += item.quantity;
+          const hasBoba =
+            Array.isArray(item.toppings) &&
+            item.toppings.some((topStr: string) => {
+              const low = String(topStr).toLowerCase();
+              return (
+                low.includes('boba') ||
+                low.includes('trân châu') ||
+                low.includes('thạch')
+              );
+            });
+          const strawCode = hasBoba ? 'PKG_STRAW_BOBA' : 'PKG_STRAW_BIO';
+          unitCogs +=
+            (pkgCostMap.get(strawCode) ?? 0) +
+            (pkgCostMap.get('PKG_TISSUE') ?? 0);
+        }
+
         const lineCogs = Math.round(unitCogs * item.quantity);
+        const lineGross = item.unitPrice * item.quantity;
         totalCogsSold += lineCogs;
+        totalGrossRevenue += lineGross;
 
         if (!productStatsMap[item.productId]) {
           productStatsMap[item.productId] = {
@@ -1040,10 +1174,18 @@ export class InventoryService {
           };
         }
         productStatsMap[item.productId].totalQuantity += item.quantity;
-        productStatsMap[item.productId].totalRevenue +=
-          item.unitPrice * item.quantity;
+        productStatsMap[item.productId].totalRevenue += lineGross;
         productStatsMap[item.productId].totalCogs += lineCogs;
         productStatsMap[item.productId].orderCount += 1;
+      }
+
+      if (orderDrinkCups > 0) {
+        const bag2Cost =
+          Math.floor(orderDrinkCups / 2) *
+          (pkgCostMap.get('PKG_BAG_2CUP') ?? 0);
+        const bagTCost =
+          (orderDrinkCups % 2) * (pkgCostMap.get('PKG_BAG_T') ?? 0);
+        totalCogsSold += Math.round(bag2Cost + bagTCost);
       }
     }
 
@@ -1053,9 +1195,9 @@ export class InventoryService {
       0,
     );
 
-    const topSellingProducts = Object.values(productStatsMap)
-      .sort((a, b) => b.totalQuantity - a.totalQuantity)
-      .slice(0, 8);
+    const topSellingProducts = Object.values(productStatsMap).sort(
+      (a, b) => b.totalQuantity - a.totalQuantity,
+    );
 
     const completedCount = orders.filter(
       (o) => o.status === OrderStatus.COMPLETED,
@@ -1085,6 +1227,8 @@ export class InventoryService {
       activeCount,
       cancelledCount,
       totalRevenue,
+      totalGrossRevenue,
+      totalDiscountAmount,
       totalCogsSold,
       totalGrossProfit,
       totalInventoryValue,

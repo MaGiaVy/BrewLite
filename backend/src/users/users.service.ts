@@ -11,6 +11,14 @@ import { Role } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 
 const ROOT_ADMIN_EMAIL = 'admin@brewlite.vn';
+const ROOT_ADMIN_EMAILS = new Set([
+  ROOT_ADMIN_EMAIL,
+  '3124410414@sv.sgu.edu.vn',
+]);
+
+function isRootAdminEmail(email?: string | null): boolean {
+  return Boolean(email && ROOT_ADMIN_EMAILS.has(email.toLowerCase().trim()));
+}
 
 @Injectable()
 export class UsersService {
@@ -54,7 +62,7 @@ export class UsersService {
         createdAt: true,
       },
     });
-    if (!user) {
+    if (!user || user.role === Role.CUSTOMER) {
       throw new NotFoundException(`Không tìm thấy nhân viên với ID ${id}`);
     }
     return user;
@@ -118,12 +126,18 @@ export class UsersService {
     }
 
     const user = await this.prisma.user.findUnique({ where: { id } });
-    if (!user) {
+    if (!user || user.role === Role.CUSTOMER) {
       throw new NotFoundException(`Không tìm thấy nhân viên với ID ${id}`);
     }
 
+    if (dto.role === Role.CUSTOMER) {
+      throw new BadRequestException(
+        'Không thể chuyển vai trò nhân viên thành CUSTOMER qua endpoint quản lý nhân sự.',
+      );
+    }
+
     // Chỉ chính Root Admin mới được chỉnh sửa thông tin tài khoản Root Admin
-    if (user.email === ROOT_ADMIN_EMAIL) {
+    if (isRootAdminEmail(user.email)) {
       if (currentAdminId !== user.id) {
         throw new ForbiddenException(
           'Chỉ chính Quản trị viên Tối cao (admin@brewlite.vn) mới được chỉnh sửa thông tin tài khoản Admin.',
@@ -149,7 +163,7 @@ export class UsersService {
     }
 
     // Không cho phép vô hiệu hóa hoặc hạ quyền bất kỳ tài khoản Admin nào
-    if (user.email === ROOT_ADMIN_EMAIL || user.role === Role.ADMIN) {
+    if (isRootAdminEmail(user.email) || user.role === Role.ADMIN) {
       if (dto.isActive === false) {
         throw new BadRequestException(
           'Tài khoản Quản trị viên (Admin) không thể bị xóa hoặc vô hiệu hóa',
@@ -192,6 +206,7 @@ export class UsersService {
     if (dto.isActive !== undefined) updateData.isActive = dto.isActive;
     if (dto.password) {
       updateData.passwordHash = await bcrypt.hash(dto.password, 10);
+      updateData.tokenVersion = { increment: 1 };
     }
 
     const updated = await this.prisma.user.update({
@@ -223,11 +238,11 @@ export class UsersService {
     }
 
     const user = await this.prisma.user.findUnique({ where: { id } });
-    if (!user) {
+    if (!user || user.role === Role.CUSTOMER) {
       throw new NotFoundException(`Không tìm thấy nhân viên với ID ${id}`);
     }
 
-    if (user.email === ROOT_ADMIN_EMAIL || user.role === Role.ADMIN) {
+    if (isRootAdminEmail(user.email) || user.role === Role.ADMIN) {
       throw new BadRequestException(
         'Tài khoản Quản trị viên (Admin) không thể bị xóa hoặc vô hiệu hóa',
       );
@@ -253,11 +268,11 @@ export class UsersService {
     }
 
     const user = await this.prisma.user.findUnique({ where: { id } });
-    if (!user) {
+    if (!user || user.role === Role.CUSTOMER) {
       throw new NotFoundException(`Không tìm thấy nhân viên với ID ${id}`);
     }
 
-    if (user.email === ROOT_ADMIN_EMAIL || user.role === Role.ADMIN) {
+    if (isRootAdminEmail(user.email) || user.role === Role.ADMIN) {
       throw new BadRequestException(
         'Tài khoản Quản trị viên (Admin) không thể bị xóa hoặc vô hiệu hóa',
       );
@@ -268,7 +283,7 @@ export class UsersService {
         where: { id },
       });
       return { success: true, message: `Đã xóa nhân viên ${user.fullName}` };
-    } catch (err: any) {
+    } catch {
       // Nếu có ràng buộc dữ liệu (đơn hàng, audits...), chuyển sang vô hiệu hóa tài khoản
       await this.prisma.user.update({
         where: { id },

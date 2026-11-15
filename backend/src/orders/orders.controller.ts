@@ -5,7 +5,6 @@ import {
   Get,
   Headers,
   Param,
-  ParseIntPipe,
   Patch,
   Post,
   Request,
@@ -18,6 +17,7 @@ import { UpdateOrderStatusDto } from './dto/update-order-status.dto.js';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import { RolesGuard } from '../auth/roles.guard.js';
 import { Roles } from '../auth/roles.decorator.js';
+import { ParseInt32Pipe } from '../common/pipes/parse-int32.pipe.js';
 
 interface AuthRequest extends Request {
   user: { userId: number; email: string; role?: Role };
@@ -71,7 +71,7 @@ export class OrdersController {
   @Get(':id')
   getOrderById(
     @Request() req: AuthRequest,
-    @Param('id', ParseIntPipe) id: number,
+    @Param('id', ParseInt32Pipe) id: number,
   ) {
     return this.ordersService.getOrderById(id, req.user.userId, req.user.role);
   }
@@ -85,7 +85,7 @@ export class OrdersController {
   @Patch(':id/status')
   updateOrderStatus(
     @Request() req: AuthRequest,
-    @Param('id', ParseIntPipe) id: number,
+    @Param('id', ParseInt32Pipe) id: number,
     @Body() dto: UpdateOrderStatusDto,
   ) {
     return this.ordersService.updateOrderStatus(
@@ -103,7 +103,7 @@ export class OrdersController {
   @Delete(':id')
   deleteOrder(
     @Request() req: AuthRequest,
-    @Param('id', ParseIntPipe) id: number,
+    @Param('id', ParseInt32Pipe) id: number,
   ) {
     return this.ordersService.deleteOrder(id, req.user.userId, req.user.role);
   }

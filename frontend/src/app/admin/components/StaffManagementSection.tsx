@@ -151,7 +151,7 @@ export default function StaffManagementSection({
         const payload = {
           fullName: fullName.trim(),
           email: email.trim(),
-          phone: phone.trim() || null,
+          phone: phone.trim() || undefined,
           password: password.trim(),
           role,
         };

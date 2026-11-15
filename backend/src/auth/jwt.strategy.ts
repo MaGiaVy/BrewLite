@@ -9,6 +9,7 @@ export interface JwtPayload {
   sub: number;
   email: string;
   role?: Role;
+  tokenVersion?: number;
 }
 
 @Injectable()
@@ -37,7 +38,13 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     try {
       const user = await this.prisma.user.findUnique({
         where: { id: userId },
-        select: { id: true, email: true, role: true, isActive: true },
+        select: {
+          id: true,
+          email: true,
+          role: true,
+          isActive: true,
+          tokenVersion: true,
+        },
       });
 
       if (!user) {
@@ -47,6 +54,12 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       if (user.isActive === false) {
         throw new UnauthorizedException(
           'Tài khoản của bạn đã bị tạm khóa. Vui lòng liên hệ Quản lý cửa hàng.',
+        );
+      }
+
+      if ((payload.tokenVersion ?? 0) !== (user.tokenVersion ?? 0)) {
+        throw new UnauthorizedException(
+          'Phiên đăng nhập đã hết hiệu lực do mật khẩu vừa được thay đổi. Vui lòng đăng nhập lại.',
         );
       }
 

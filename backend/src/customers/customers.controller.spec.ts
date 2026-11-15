@@ -56,27 +56,28 @@ describe('CustomersController', () => {
   });
 
   it('createCustomer gọi service.createCustomer với dto', async () => {
-    const dto: CreateCustomerDto = {
+    const dto = {
       email: 'a@b.com',
       fullName: 'A B',
-    };
-    service.createCustomer.mockResolvedValue({ id: 1, ...dto });
+      password: 'Password123',
+    } as CreateCustomerDto;
+    service.createCustomer.mockResolvedValue({ id: 1, email: dto.email, fullName: dto.fullName });
     await controller.createCustomer(dto);
     expect(service.createCustomer).toHaveBeenCalledWith(dto);
   });
 
   it('updateCustomer gọi service.updateCustomer với id và dto', async () => {
-    const dto: UpdateCustomerDto = {
+    const dto = {
       fullName: 'New Name',
-    };
-    service.updateCustomer.mockResolvedValue({ id: 1, ...dto });
+    } as UpdateCustomerDto;
+    service.updateCustomer.mockResolvedValue({ id: 1, fullName: dto.fullName });
     await controller.updateCustomer(1, dto);
     expect(service.updateCustomer).toHaveBeenCalledWith(1, dto);
   });
 
   it('toggleCustomerStatus gọi service.toggleCustomerStatus với id và status', async () => {
     service.toggleCustomerStatus.mockResolvedValue({ id: 1, isActive: false });
-    await controller.toggleCustomerStatus(1, false);
+    await controller.toggleCustomerStatus(1, { isActive: false });
     expect(service.toggleCustomerStatus).toHaveBeenCalledWith(1, false);
   });
 

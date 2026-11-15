@@ -343,6 +343,16 @@ function CheckoutContent() {
   const [isBiometricPending, setIsBiometricPending] = useState(false);
   const biometricTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const biometricCancelledRef = useRef(false);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current) {
+        clearTimeout(copyTimerRef.current);
+        copyTimerRef.current = null;
+      }
+    };
+  }, []);
   const [expirySyncExhaustedKey, setExpirySyncExhaustedKey] = useState<string | null>(null);
   const [isRefreshingExpiryStatus, setIsRefreshingExpiryStatus] = useState(false);
 
@@ -360,19 +370,30 @@ function CheckoutContent() {
     if (typeof navigator !== "undefined" && navigator.clipboard) {
       navigator.clipboard.writeText(text);
       setCopiedField(fieldName);
-      setTimeout(() => setCopiedField(null), 2000);
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = setTimeout(() => {
+        copyTimerRef.current = null;
+        setCopiedField(null);
+      }, 2000);
     }
   };
 
-  // Tự động kết nối máy chủ ZaloPay Sandbox khi khách hàng chọn ZaloPay (chỉ khi đơn đang PENDING và còn hạn 5 phút)
+  // Tự động kết nối máy chủ ZaloPay Sandbox khi khách hàng chọn ZaloPay (chỉ khi đơn > 0đ, đang PENDING và còn hạn 5 phút)
   const orderId = order?.id;
   const orderStatus = order?.status;
   const orderCreatedAt = order?.createdAt;
+  const orderTotalAmount = order?.totalAmount;
 
   useEffect(() => {
     let active = true;
     const initZaloPay = async () => {
-      if (!orderId || orderStatus !== "PENDING" || selectedMethod !== "EWALLET" || ewalletProvider !== "ZALOPAY") {
+      if (
+        !orderId ||
+        orderStatus !== "PENDING" ||
+        (orderTotalAmount ?? 0) <= 0 ||
+        selectedMethod !== "EWALLET" ||
+        ewalletProvider !== "ZALOPAY"
+      ) {
         return;
       }
       if (orderCreatedAt) {
@@ -443,7 +464,7 @@ function CheckoutContent() {
     return () => {
       active = false;
     };
-  }, [orderId, orderStatus, orderCreatedAt, selectedMethod, ewalletProvider, zaloPayData?.appTransId]);
+  }, [orderId, orderStatus, orderCreatedAt, orderTotalAmount, selectedMethod, ewalletProvider, zaloPayData?.appTransId]);
 
   // Polling tự động mỗi 3 giây tra cứu trạng thái thanh toán từ máy chủ ZaloPay (dừng ngay khi không còn PENDING)
   useEffect(() => {
@@ -972,6 +993,12 @@ function CheckoutContent() {
       return;
     }
 
+    // Đơn hàng 0đ (voucher miễn phí 100%): bỏ qua cổng ZaloPay / kiểm tra thẻ, xác nhận trực tiếp với backend
+    if ((order.totalAmount ?? 0) <= 0) {
+      await executeBackendPayment();
+      return;
+    }
+
     // Nếu là Ví ZaloPay E-Wallet: Chuyển hướng sang Cổng ZaloPay Gateway độc lập
     if (selectedMethod === "EWALLET" && ewalletProvider === "ZALOPAY") {
       if (zaloPayLoading || !zaloPayData?.orderUrl) {
@@ -1018,10 +1045,9 @@ function CheckoutContent() {
   const discountAmount = order?.discountAmount ?? 0;
   const discountCode = order?.discountCode ?? null;
   const afterDiscount = Math.max(0, subtotal - discountAmount);
-  // Thuế VAT 8% áp dụng vào giá tạm tính
-  const vat = Math.floor(afterDiscount * 0.08);
-  // Làm tròn xuống hàng nghìn VNĐ (ví dụ 144.720đ -> 144.000đ)
-  const totalAmount = order?.totalAmount ?? (Math.floor((afterDiscount + vat) / 1000) * 1000);
+  const totalAmount = order?.totalAmount ?? afterDiscount;
+  const vat = order?.items?.length && totalAmount > afterDiscount ? totalAmount - afterDiscount : 0;
+  const isZeroAmountOrder = Boolean(order && (order.totalAmount ?? 0) <= 0);
   const loyaltyPoints = Math.floor(totalAmount / 1000);
 
   return (
@@ -1501,11 +1527,13 @@ function CheckoutContent() {
                   </span>
                 </div>
 
-                {/* Thuế VAT (8%) */}
-                <div className="flex justify-between text-stone-600">
-                  <span>{"Thuế VAT (8%)".normalize("NFC")}</span>
-                  <span className="text-stone-700 font-medium tabular-nums">{vnd(vat)}</span>
-                </div>
+                {/* Thuế VAT (chỉ hiển thị nếu đơn cũ có phát sinh VAT) */}
+                {vat > 0 && (
+                  <div className="flex justify-between text-stone-600">
+                    <span>{"Thuế VAT".normalize("NFC")}</span>
+                    <span className="text-stone-700 font-medium tabular-nums">{vnd(vat)}</span>
+                  </div>
+                )}
 
                 {/* Tích luỹ hạt thưởng */}
                 <div className="flex justify-between items-center pt-1 border-t border-dashed border-[#EAE2D5]">
@@ -1525,9 +1553,11 @@ function CheckoutContent() {
                       <span className="text-xs font-bold text-stone-700 uppercase tracking-wide block">
                         {"Tổng thanh toán:".normalize("NFC")}
                       </span>
-                      <span className="text-[11px] text-stone-500 font-normal">
-                        {"(đã làm tròn)".normalize("NFC")}
-                      </span>
+                      {vat > 0 && (
+                        <span className="text-[11px] text-stone-500 font-normal">
+                          {"(đã làm tròn)".normalize("NFC")}
+                        </span>
+                      )}
                     </div>
                   </div>
                   <span className="font-sans text-2xl md:text-3xl font-bold text-[#1A120B] tabular-nums tracking-tight">
@@ -1749,8 +1779,21 @@ function CheckoutContent() {
                         </button>
                       </div>
 
-                      {/* Giao diện 1: ZaloPay Sandbox */}
+                      {/* Giao diện 1: ZaloPay Sandbox (hoặc miễn phí 0đ không cần cổng ZaloPay) */}
                       {ewalletProvider === "ZALOPAY" ? (
+                        isZeroAmountOrder ? (
+                          <div className="rounded-xl border border-emerald-200 bg-emerald-50/80 p-4 text-xs text-emerald-900 flex items-start gap-2.5">
+                            <CheckCircle2 size={18} className="text-emerald-600 shrink-0 mt-0.5" />
+                            <div>
+                              <p className="font-bold text-emerald-950">
+                                {"Đơn hàng 0đ (áp dụng voucher miễn phí 100%)".normalize("NFC")}
+                              </p>
+                              <p className="mt-1 text-emerald-800">
+                                {"Không cần khởi tạo giao dịch ZaloPay. Bấm \"Xác nhận đơn miễn phí • 0đ\" bên dưới để hoàn tất đơn hàng ngay.".normalize("NFC")}
+                              </p>
+                            </div>
+                          </div>
+                        ) : (
                         <div className="flex flex-col md:flex-row items-center md:items-start gap-5 pt-1">
                           {/* Cột Trái: Mã QR ZaloPay */}
                           <div className="flex flex-col items-center shrink-0">
@@ -1878,6 +1921,7 @@ function CheckoutContent() {
                             </div>
                           </div>
                         </div>
+                        )
                       ) : (
                         <div className="flex flex-col md:flex-row items-center md:items-start gap-5 pt-1">
                           {/* Cột Trái: Ảnh VietQR Động */}
@@ -2430,6 +2474,7 @@ function CheckoutContent() {
                         isOrderExpired ||
                         (order.status !== "PENDING" && order.status !== "PAYMENT_FAILED") ||
                         (order.status === "PENDING" &&
+                          !isZeroAmountOrder &&
                           selectedMethod === "EWALLET" &&
                           ewalletProvider === "ZALOPAY" &&
                           (zaloPayLoading || !zaloPayData?.orderUrl))
@@ -2470,6 +2515,8 @@ function CheckoutContent() {
                           <span className="font-sans font-bold">
                             {effectiveSimulateFailure
                               ? "Thử nghiệm Lỗi Thanh toán (Demo)".normalize("NFC")
+                              : isZeroAmountOrder
+                              ? `Xác nhận đơn miễn phí • ${vnd(order.totalAmount)} →`.normalize("NFC")
                               : selectedMethod === "EWALLET"
                               ? ewalletProvider === "ZALOPAY"
                                 ? `Thanh toán qua ZaloPay E-Wallet • ${vnd(order.totalAmount)} →`.normalize("NFC")

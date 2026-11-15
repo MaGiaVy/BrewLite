@@ -963,14 +963,14 @@ export default function BaristaKdsPage() {
           <div className="bg-white rounded-2xl p-4 border border-[#E6DCD2] shadow-[0_4px_14px_rgba(44,24,16,0.04)] flex items-center justify-between">
             <div className="flex flex-col">
               <span className="text-[11px] font-extrabold uppercase tracking-wider text-[#504440]">
-                Tổng ly đang làm / Đã giao
+                Tổng món đang làm / Đã giao
               </span>
               <div className="flex items-baseline gap-2 mt-1">
                 <span className="font-mono text-2xl font-extrabold text-[#2C1810]">
                   {totalActiveCups}
                 </span>
                 <span className="text-xs text-[#2D6A4F] font-bold">
-                  • Đã giao: {totalCompletedCups} ly
+                  • Đã giao: {totalCompletedCups} món
                 </span>
               </div>
             </div>

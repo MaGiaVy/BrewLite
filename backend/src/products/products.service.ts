@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { OrderStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import {
   CreateProductDto,
@@ -15,6 +16,7 @@ export class ProductsService {
     product: any,
     orderCountMap?: Record<number, number>,
     isAdmin = false,
+    includeIsActive = false,
   ) {
     if (!product) return product;
 
@@ -32,9 +34,11 @@ export class ProductsService {
           imageUrl: product.imageUrl ?? null,
           description: product.description ?? null,
           isOutOfStock: true,
+          isSoldOutManual: manualSoldOut,
           outOfStockSizes: ['S', 'M', 'L'],
           availableServings: 0,
           category: product.category,
+          ...(includeIsActive ? { isActive: product.isActive } : {}),
         };
       }
       return {
@@ -146,6 +150,7 @@ export class ProductsService {
         outOfStockSizes,
         availableServings: manualSoldOut ? 0 : computedServings,
         category: product.category,
+        ...(includeIsActive ? { isActive: product.isActive } : {}),
       };
     }
 
@@ -208,6 +213,18 @@ export class ProductsService {
     let orderCountMap: Record<number, number> | undefined;
     if (includeInactive && (this.prisma as any).orderItem?.findMany) {
       const orderItems = await this.prisma.orderItem.findMany({
+        where: {
+          order: {
+            status: {
+              in: [
+                OrderStatus.PAID,
+                OrderStatus.PREPARING,
+                OrderStatus.READY,
+                OrderStatus.COMPLETED,
+              ],
+            },
+          },
+        },
         select: { productId: true, quantity: true },
       });
       orderCountMap = {};
@@ -217,10 +234,12 @@ export class ProductsService {
       }
     }
 
-    return products.map((p) => this.enrichProductStock(p, orderCountMap, isAdmin));
+    return products.map((p) =>
+      this.enrichProductStock(p, orderCountMap, isAdmin, includeInactive),
+    );
   }
 
-  async findOne(id: number, isAdmin = false) {
+  async findOne(id: number, isAdmin = false, allowInactive = isAdmin) {
     const product = await this.prisma.product.findUnique({
       where: { id },
       include: {
@@ -232,10 +251,15 @@ export class ProductsService {
         },
       },
     });
-    if (!product) {
+    if (!product || (!allowInactive && product.isActive === false)) {
       throw new NotFoundException(`Product #${id} not found`);
     }
-    return this.enrichProductStock(product, undefined, isAdmin);
+    return this.enrichProductStock(
+      product,
+      undefined,
+      isAdmin,
+      allowInactive && !isAdmin,
+    );
   }
 
   async create(dto: CreateProductDto) {

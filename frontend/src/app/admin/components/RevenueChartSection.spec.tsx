@@ -1,5 +1,7 @@
-import { describe, it, expect } from "vitest";
-import {
+import React from "react";
+import { describe, it, expect, afterEach } from "vitest";
+import { render, screen, cleanup } from "@testing-library/react";
+import RevenueChartSection, {
   computeRevenueDashboardMetrics,
   type OrderSummary,
   type ProductItem,
@@ -163,5 +165,53 @@ describe("computeRevenueDashboardMetrics (Wave 4)", () => {
       expect(Number.isNaN(cat.revenue)).toBe(false);
       expect(Number.isNaN(cat.percent)).toBe(false);
     }
+  });
+});
+
+describe("RevenueChartSection bakery vs beverage unit rendering (M-09)", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("renders 'phần' for bakery items, 'ly' for beverage items, and 'món' for total items", () => {
+    const products: ProductItem[] = [
+      { id: 2, name: "Latte", category: "espresso", basePrice: 55000 },
+      { id: 3, name: "Pain au Chocolat", category: "bakery", basePrice: 39000 },
+    ];
+    const allOrders: OrderSummary[] = [
+      {
+        id: 501,
+        status: "COMPLETED",
+        totalAmount: 94000,
+        createdAt: new Date().toISOString(),
+        items: [
+          {
+            id: 1,
+            productId: 2,
+            productName: "Latte",
+            size: "M",
+            toppings: [],
+            quantity: 1,
+            unitPrice: 55000,
+          },
+          {
+            id: 2,
+            productId: 3,
+            productName: "Pain au Chocolat",
+            size: "ALL",
+            toppings: [],
+            quantity: 1,
+            unitPrice: 39000,
+          },
+        ],
+      },
+    ];
+
+    render(<RevenueChartSection allOrders={allOrders} products={products} />);
+
+    expect(screen.getByText("2 món")).toBeInTheDocument();
+    expect(screen.getByText("1 phần")).toBeInTheDocument();
+    expect(screen.getByText("1 ly")).toBeInTheDocument();
+    expect(screen.getByText("Tổng Doanh Số Thực Đơn:")).toBeInTheDocument();
   });
 });

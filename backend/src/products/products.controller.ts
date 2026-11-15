@@ -5,7 +5,6 @@ import {
   Get,
   Injectable,
   Param,
-  ParseIntPipe,
   Patch,
   Post,
   Query,
@@ -17,6 +16,7 @@ import { Role } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import { Roles } from '../auth/roles.decorator.js';
 import { RolesGuard } from '../auth/roles.guard.js';
+import { ParseInt32Pipe } from '../common/pipes/parse-int32.pipe.js';
 import {
   CreateProductDto,
   ToggleProductVisibilityDto,
@@ -67,12 +67,15 @@ export class ProductsController {
   @UseGuards(OptionalJwtAuthGuard)
   @Get(':id')
   findOne(
-    @Param('id', ParseIntPipe) id: number,
+    @Param('id', ParseInt32Pipe) id: number,
     @Request() req?: any,
   ) {
     const user = extractUserFromRequest(req);
     const isAdmin = user?.role === Role.ADMIN;
-    return this.productsService.findOne(id, isAdmin);
+    const isStaff = user?.role === Role.STAFF;
+    return isStaff
+      ? this.productsService.findOne(id, isAdmin, true)
+      : this.productsService.findOne(id, isAdmin);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -86,7 +89,7 @@ export class ProductsController {
   @Roles(Role.STAFF, Role.ADMIN)
   @Patch(':id/sold-out')
   toggleSoldOut(
-    @Param('id', ParseIntPipe) id: number,
+    @Param('id', ParseInt32Pipe) id: number,
     @Body() dto: ToggleSoldOutDto,
     @Request() req?: any,
   ) {
@@ -99,7 +102,7 @@ export class ProductsController {
   @Roles(Role.ADMIN)
   @Patch(':id/visibility')
   toggleVisibility(
-    @Param('id', ParseIntPipe) id: number,
+    @Param('id', ParseInt32Pipe) id: number,
     @Body() dto: ToggleProductVisibilityDto,
   ) {
     return this.productsService.toggleVisibility(id, dto);
@@ -109,7 +112,7 @@ export class ProductsController {
   @Roles(Role.ADMIN)
   @Patch(':id')
   update(
-    @Param('id', ParseIntPipe) id: number,
+    @Param('id', ParseInt32Pipe) id: number,
     @Body() dto: UpdateProductDto,
   ) {
     return this.productsService.update(id, dto);
@@ -118,7 +121,7 @@ export class ProductsController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN)
   @Delete(':id')
-  remove(@Param('id', ParseIntPipe) id: number) {
+  remove(@Param('id', ParseInt32Pipe) id: number) {
     return this.productsService.remove(id);
   }
 }

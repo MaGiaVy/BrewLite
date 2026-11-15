@@ -2,9 +2,11 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { OrderStatus, PaymentStatus, PaymentMethod, Role } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -13,6 +15,7 @@ import { MockPaymentService } from './mock-payment.service.js';
 import { ZaloPayService, ZaloPayCreateOrderResult, ZaloPayQueryResult } from './zalopay.service.js';
 import { assertTransition } from './state-machine.helper.js';
 import { refundOrderResources } from '../orders/order-refund.helper.js';
+import { INT32_MAX } from '../common/pipes/parse-int32.pipe.js';
 
 /** Ty le quy doi Hat Vang (Task 10): 1.000 VND = 1 diem */
 const POINTS_PER_VND = 1000;
@@ -47,12 +50,19 @@ export class PaymentsService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly mockPaymentService: MockPaymentService,
+    @Optional()
+    @Inject(MockPaymentService)
+    private readonly mockPaymentService: MockPaymentService | undefined,
     private readonly zaloPayService: ZaloPayService,
   ) {}
 
   private assertValidOrderId(orderId: unknown): asserts orderId is number {
-    if (typeof orderId !== 'number' || !Number.isInteger(orderId) || orderId <= 0) {
+    if (
+      typeof orderId !== 'number' ||
+      !Number.isInteger(orderId) ||
+      orderId <= 0 ||
+      orderId > INT32_MAX
+    ) {
       throw new BadRequestException('Mã đơn hàng không hợp lệ');
     }
   }
@@ -523,12 +533,24 @@ export class PaymentsService {
         // Xac thuc lai state transition trong transaction
         assertTransition(activeStatus, targetStatus);
 
-        // Goi MockPaymentService
-        const mockResult = await this.mockPaymentService.processPayment({
-          amount: paymentAmount,
-          method: dto.method,
-          simulateFailure: dto.simulateFailure,
-        });
+        // Goi MockPaymentService (hoac xac nhan 0đ truc tiep neu khong co mock gateway)
+        const mockResult = this.mockPaymentService
+          ? await this.mockPaymentService.processPayment({
+              amount: paymentAmount,
+              method: dto.method,
+              simulateFailure: dto.simulateFailure,
+            })
+          : paymentAmount === 0 && !dto.simulateFailure
+            ? {
+                success: true,
+                transactionId: `FREE-${currentOrder.id}`,
+                message: 'Xác nhận đơn hàng miễn phí 0đ thành công.',
+              }
+            : (() => {
+                throw new ForbiddenException(
+                  'Cổng thanh toán thử nghiệm (Mock Payment) không khả dụng.',
+                );
+              })();
 
         if (!mockResult.success) {
           // Thanh toan that bai
@@ -657,7 +679,7 @@ export class PaymentsService {
         };
       });
     } catch (err: any) {
-      if (err?.code === 'P2002' && idempotencyKey) {
+      if ((err?.code === 'P2002' || err instanceof ConflictException) && idempotencyKey) {
         const existingPayment = await this.prisma.payment.findUnique({
           where: { idempotencyKey },
           include: { order: true },
@@ -669,7 +691,7 @@ export class PaymentsService {
             );
           }
           this.logger.log(
-            `[Idempotency] Phat hien yeu cau trung lap P2002 sau rollback voi key "${idempotencyKey}". Tra ve ket qua giao dich cu.`,
+            `[Idempotency] Phat hien yeu cau trung lap sau rollback voi key "${idempotencyKey}". Tra ve ket qua giao dich cu.`,
           );
           return this.buildIdempotentPaymentResponse(existingPayment);
         }
@@ -793,6 +815,27 @@ export class PaymentsService {
       }
     }
 
+    if (order.totalAmount === 0) {
+      if (this.prisma.$transaction) {
+        await this.prisma.$transaction(async (tx: any) =>
+          this.settleZaloPayPaymentInTx(tx, order, 0, `FREE_ORDER_${order.id}`),
+        );
+      }
+      const webUrl = (
+        process.env.WEB_URL ||
+        process.env.CORS_ORIGIN ||
+        'http://localhost:3000'
+      ).replace(/\/+$/, '');
+      return {
+        returnCode: 1,
+        returnMessage: 'Đơn hàng 0đ đã được xác nhận thanh toán miễn phí.',
+        subReturnCode: 1,
+        subReturnMessage: 'Đơn hàng 0đ đã được xác nhận thanh toán miễn phí.',
+        orderUrl: `${webUrl}/order-confirmation?orderId=${order.id}`,
+        appTransId: `FREE_${order.id}`,
+      };
+    }
+
     return await this.zaloPayService.createOrder({
       orderId: order.id,
       amount: order.totalAmount,
@@ -808,6 +851,10 @@ export class PaymentsService {
    *           Bắt lỗi P2002 khi tạo payment và trả về return_code: 1
    */
   async handleZaloPayCallback(body: { data: string; mac: string; type?: number }) {
+    if (!body || typeof body.data !== 'string' || typeof body.mac !== 'string') {
+      this.logger.error('[ZaloPay Callback] Dữ liệu callback rỗng hoặc sai định dạng');
+      return { return_code: -1, return_message: 'mac not equal' };
+    }
     const isValid = this.zaloPayService.verifyCallback(body.data, body.mac);
     if (!isValid) {
       this.logger.error('[ZaloPay Callback] Chữ ký MAC không hợp lệ (Tampered Data)');
@@ -818,23 +865,31 @@ export class PaymentsService {
       const dataJson = JSON.parse(body.data);
       const { app_trans_id, amount, zp_trans_id, embed_data } = dataJson;
 
-      let orderId: number | null = null;
+      let embedOrderId: number | null = null;
       if (embed_data) {
         try {
           const parsed = JSON.parse(embed_data);
           if (parsed.orderId) {
             const parsedId = Number(parsed.orderId);
             if (Number.isInteger(parsedId) && parsedId > 0) {
-              orderId = parsedId;
+              embedOrderId = parsedId;
             }
           }
         } catch {}
       }
 
-      // Fallback lấy orderId từ app_trans_id: yymmdd_orderId_random
-      if (!orderId) {
-        orderId = this.extractOrderIdFromAppTransId(app_trans_id);
+      const transOrderId = this.extractOrderIdFromAppTransId(app_trans_id);
+      if (embedOrderId && transOrderId && embedOrderId !== transOrderId) {
+        this.logger.error(
+          `[ZaloPay Callback] Không khớp orderId giữa embed_data (${embedOrderId}) và app_trans_id (${transOrderId})`,
+        );
+        return {
+          return_code: 0,
+          return_message: 'app_trans_id and embed_data.orderId mismatch',
+        };
       }
+
+      const orderId = embedOrderId ?? transOrderId;
 
       if (!orderId) {
         this.logger.error(`[ZaloPay Callback] Không trích xuất được orderId từ app_trans_id: ${app_trans_id}`);
@@ -864,8 +919,14 @@ export class PaymentsService {
         return { return_code: 1, return_message: 'Order already processed' };
       }
 
-      // CRITICAL-06 & Task 2.2: Kiểm tra số tiền thanh toán thực tế khớp chính xác với order.totalAmount, không cho phép rỗng
-      if (!amount || Number(amount) !== order.totalAmount) {
+      // CRITICAL-06 & Task 2.2: Kiểm tra số tiền thanh toán thực tế khớp chính xác với order.totalAmount, không cho phép rỗng/NaN
+      if (
+        amount === undefined ||
+        amount === null ||
+        amount === '' ||
+        !Number.isFinite(Number(amount)) ||
+        Number(amount) !== order.totalAmount
+      ) {
         this.logger.error(
           `[ZaloPay Callback] Gian lận số tiền! Số tiền callback (${amount}) không khớp đơn #${orderId} (${order.totalAmount})`,
         );
@@ -921,7 +982,7 @@ export class PaymentsService {
         }
 
         if (alreadyProcessedStatuses.includes(txOrder.status)) {
-          return { return_code: 1, return_message: 'success' };
+          return { return_code: 1, return_message: 'Order already processed' };
         }
 
         if (
@@ -1193,6 +1254,7 @@ export class PaymentsService {
 
   /**
    * Hủy thanh toán từ Cổng ZaloPay Sandbox Gateway
+   * Chỉ chủ sở hữu đơn hàng (order.userId === userId) được phép hủy; riêng đơn ở trạng thái PAID yêu cầu chủ sở hữu có role STAFF hoặc ADMIN.
    * MEDIUM-08 & Task 2.5: Đổi trạng thái sang CANCELLED, hoàn kho BOM/bao bì, hoàn voucher và thu hồi điểm loyalty
    */
   async cancelZaloPaySandbox(

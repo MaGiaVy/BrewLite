@@ -54,6 +54,11 @@ export function isBakeryProduct(product?: { name?: string; category?: string } |
   );
 }
 
+/** Return Vietnamese serving unit label ("phần" for bakery, "ly" for drinks) */
+export function getProductUnitLabel(product?: { name?: string; category?: string } | null): "phần" | "ly" {
+  return isBakeryProduct(product) ? "phần" : "ly";
+}
+
 /** Unique key used to detect duplicate cart entries */
 function itemKey(
   item: Pick<

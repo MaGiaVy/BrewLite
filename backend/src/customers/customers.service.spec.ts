@@ -159,7 +159,26 @@ describe('CustomersService — Admin Customer Management API', () => {
   });
 
   describe('createCustomer', () => {
-    it('tạo khách hàng mới thành công với điểm Hạt Vàng luôn = 0 và mật khẩu mặc định 123456', async () => {
+    it('từ chối tạo khách hàng nếu thiếu mật khẩu hoặc mật khẩu < 6 ký tự (không fallback 123456)', async () => {
+      prisma.user.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.createCustomer({
+          email: 'missing-pw@example.com',
+          fullName: 'Lê Thị B',
+        } as any),
+      ).rejects.toThrow(BadRequestException);
+
+      await expect(
+        service.createCustomer({
+          email: 'short-pw@example.com',
+          fullName: 'Lê Thị B',
+          password: '123',
+        } as any),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('tạo khách hàng mới thành công với điểm Hạt Vàng luôn = 0 khi cấp mật khẩu hợp lệ', async () => {
       prisma.user.findUnique.mockResolvedValue(null);
       prisma.user.create.mockImplementation(({ data }) =>
         Promise.resolve({
@@ -177,6 +196,7 @@ describe('CustomersService — Admin Customer Management API', () => {
         email: '  NewCustomer@Example.COM  ',
         fullName: '  Lê Thị B  ',
         phone: '  0912345678  ',
+        password: 'StrongPassword123',
       };
 
       const result = await service.createCustomer(dto);

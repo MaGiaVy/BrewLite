@@ -507,12 +507,23 @@ function OrderConfirmationContent() {
     }
   };
 
+  const receiptTimersRef = useRef<Array<ReturnType<typeof setTimeout>>>([]);
+  useEffect(() => {
+    const timers = receiptTimersRef.current;
+    return () => {
+      timers.forEach(clearTimeout);
+      timers.length = 0;
+    };
+  }, []);
+
   const handleDownloadReceipt = () => {
     setReceiptState("loading");
-    setTimeout(() => {
+    const t1 = setTimeout(() => {
       setReceiptState("done");
-      setTimeout(() => setReceiptState("idle"), 3000);
+      const t2 = setTimeout(() => setReceiptState("idle"), 3000);
+      receiptTimersRef.current.push(t2);
     }, 800);
+    receiptTimersRef.current.push(t1);
   };
 
   if (loading) {
@@ -1461,9 +1472,11 @@ function OrderConfirmationContent() {
                         <span className="text-[17px] font-semibold text-[#2c1810] block">
                           Tổng thanh toán
                         </span>
-                        <span className="text-[11px] text-[#827470]">
-                          (đã làm tròn)
-                        </span>
+                        {hasChargedVat && (
+                          <span className="text-[11px] text-[#827470]">
+                            (đã làm tròn)
+                          </span>
+                        )}
                       </div>
                     </div>
                     <div className="flex items-baseline gap-1 text-right">

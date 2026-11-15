@@ -4,7 +4,6 @@ import {
   Delete,
   Get,
   Param,
-  ParseIntPipe,
   Patch,
   Post,
   Request,
@@ -14,6 +13,8 @@ import { Role } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import { Roles } from '../auth/roles.decorator.js';
 import { RolesGuard } from '../auth/roles.guard.js';
+import { ParseInt32Pipe } from '../common/pipes/parse-int32.pipe.js';
+import { ToggleStatusDto } from '../common/dto/toggle-status.dto.js';
 import { CreateStaffDto } from './dto/create-staff.dto.js';
 import { UpdateStaffDto } from './dto/update-staff.dto.js';
 import { UsersService } from './users.service.js';
@@ -30,7 +31,7 @@ export class UsersController {
   }
 
   @Get(':id')
-  getStaffById(@Param('id', ParseIntPipe) id: number) {
+  getStaffById(@Param('id', ParseInt32Pipe) id: number) {
     return this.usersService.getStaffById(id);
   }
 
@@ -41,7 +42,7 @@ export class UsersController {
 
   @Patch(':id')
   updateStaff(
-    @Param('id', ParseIntPipe) id: number,
+    @Param('id', ParseInt32Pipe) id: number,
     @Body() dto: UpdateStaffDto,
     @Request() req: any,
   ) {
@@ -50,15 +51,19 @@ export class UsersController {
 
   @Patch(':id/status')
   toggleStaffStatus(
-    @Param('id', ParseIntPipe) id: number,
-    @Body('isActive') isActive: boolean,
+    @Param('id', ParseInt32Pipe) id: number,
+    @Body() dto: ToggleStatusDto,
     @Request() req: any,
   ) {
-    return this.usersService.toggleStaffStatus(id, isActive, req.user?.userId);
+    return this.usersService.toggleStaffStatus(
+      id,
+      dto.isActive,
+      req.user?.userId,
+    );
   }
 
   @Delete(':id')
-  deleteStaff(@Param('id', ParseIntPipe) id: number, @Request() req: any) {
+  deleteStaff(@Param('id', ParseInt32Pipe) id: number, @Request() req: any) {
     return this.usersService.deleteStaff(id, req.user?.userId);
   }
 }

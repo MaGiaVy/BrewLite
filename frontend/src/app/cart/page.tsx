@@ -663,10 +663,8 @@ function SummaryCard({
 }) {
   const ECO_FEE = 0;
   const afterDiscount = Math.max(0, subtotal - discount);
-  // Thuế VAT 8% áp dụng vào giá tạm tính
   const vat = Math.floor(afterDiscount * 0.08);
-  // Làm tròn xuống hàng nghìn VNĐ (ví dụ 144.720đ -> 144.000đ)
-  const total = Math.floor((afterDiscount + vat + ECO_FEE) / 1000) * 1000;
+  const total = afterDiscount + vat + ECO_FEE;
   const loyaltyPoints = Math.floor(total / 1000);
 
   const isUnderMin = Boolean(
@@ -754,14 +752,9 @@ function SummaryCard({
       {/* Tổng cộng */}
       <div className="flex items-end justify-between gap-2">
         <div>
-          <div className="flex items-center gap-1.5">
-            <p className="text-[11px] text-stone-400 font-body uppercase tracking-wider font-bold">
-              {"Tổng cộng".normalize("NFC")}
-            </p>
-            <span className="text-[11px] text-stone-400 font-body font-medium">
-              {"(đã làm tròn)".normalize("NFC")}
-            </span>
-          </div>
+          <p className="text-[11px] text-stone-400 font-body uppercase tracking-wider font-bold">
+            {"Tổng cộng".normalize("NFC")}
+          </p>
         </div>
         <span className="text-2xl font-bold text-stone-900 leading-tight">
           {vnd(total)}
@@ -1223,7 +1216,7 @@ export default function CartPage() {
               ]
                 .filter(Boolean)
                 .join(" - ") || undefined,
-            toppings: item.toppings ?? [],
+            toppings: (item.toppings ?? []).map((t) => t.trim()).filter(Boolean),
             quantity: item.quantity,
             unitPrice: item.price,
           };
@@ -1711,11 +1704,8 @@ export default function CartPage() {
             <div className="flex items-center gap-1.5">
               <span className="text-[14px] font-bold">
                 {vnd(
-                  Math.floor(
-                    (Math.max(0, subtotal - discountAmount) +
-                      Math.floor(Math.max(0, subtotal - discountAmount) * 0.08)) /
-                      1000
-                  ) * 1000
+                  Math.max(0, subtotal - discountAmount) +
+                    Math.floor(Math.max(0, subtotal - discountAmount) * 0.08)
                 )}
               </span>
               <ArrowRight size={16} strokeWidth={2.5} />

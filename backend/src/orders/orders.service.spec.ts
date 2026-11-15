@@ -938,6 +938,14 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
         },
       };
 
+      prisma.toppingRecipe.findMany.mockResolvedValueOnce([
+        {
+          toppingId: 'boba_white',
+          toppingName: 'Trân châu trắng',
+          price: 8000,
+          isActive: true,
+        },
+      ]);
       prisma.$transaction.mockImplementation(async (cb: any) => cb(mockTx));
 
       await service.createOrder(
@@ -1281,10 +1289,10 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
       );
 
       // Backend tự tính đơn giá: 42.000 + 5.000 (size M) + 8.000 (topping) = 55.000đ/ly
-      // Subtotal = 55.000 * 2 = 110.000đ, VAT 8% = 8.800đ -> totalAmount = 118.000đ
+      // Subtotal = 55.000 * 2 = 110.000đ, VAT 8% = 8.800đ -> totalAmount = 118.800đ
       expect(capturedCreateData.items.create[0].unitPrice).toBe(55000);
-      expect(capturedCreateData.totalAmount).toBe(118000);
-      expect(result.totalAmount).toBe(118000);
+      expect(capturedCreateData.totalAmount).toBe(118800);
+      expect(result.totalAmount).toBe(118800);
     });
 
     it('đọc phụ thu size chuẩn từ StoreSetting khi sizeUpchargeM/L là null và miễn phụ thu cho bánh ngọt', async () => {
@@ -3034,7 +3042,7 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
       };
       prisma.$transaction.mockImplementationOnce(async (cb: any) => cb(mockTx));
 
-      // Mixed payload: beverage 'L' + bakery 'ALL' succeeds (97000 * 1.08 = 104760 -> 104000)
+      // Mixed payload: beverage 'L' + bakery 'ALL' succeeds (97000 * 1.08 = 104760)
       const mixedOk = await service.createOrder(
         {
           items: [
@@ -3044,17 +3052,17 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
         } as any,
         1,
       );
-      expect(mixedOk.totalAmount).toBe(104000);
+      expect(mixedOk.totalAmount).toBe(104760);
 
       prisma.$transaction.mockImplementationOnce(async (cb: any) => cb(mockTx));
-      // Bakery with size 'M' succeeds with 0 upcharge (39000 * 1.08 = 42120 -> 42000)
+      // Bakery with size 'M' succeeds with 0 upcharge (39000 * 1.08 = 42120)
       const bakeryM = await service.createOrder(
         {
           items: [{ productId: 8, size: 'M', toppings: [], quantity: 1 }],
         } as any,
         1,
       );
-      expect(bakeryM.totalAmount).toBe(42000);
+      expect(bakeryM.totalAmount).toBe(42120);
     });
 
     it('computeRequiredIngredients does NOT classify a beverage as isBakery when size "ALL" is passed directly', async () => {

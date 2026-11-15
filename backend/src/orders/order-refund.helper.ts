@@ -17,6 +17,9 @@ export async function refundOrderResources(
     userId?: number | null;
     discountCode?: string | null;
     voucherDeducted?: boolean;
+    voucherDiscountPercent?: number | null;
+    voucherMinOrderAmount?: number | null;
+    voucherMaxDiscountAmount?: number | null;
     items?: Array<any>;
   },
   options: RefundOrderOptions,
@@ -126,10 +129,25 @@ export async function refundOrderResources(
     tx.userVoucher
   ) {
     const resolveVoucherMetadata = async () => {
-      let discountPercent = 10;
-      let minOrderAmount = 0;
-      let maxDiscountAmount: number | null = null;
-      if (tx.discountCode?.findUnique) {
+      let discountPercent =
+        order.voucherDiscountPercent !== undefined &&
+        order.voucherDiscountPercent !== null
+          ? Number(order.voucherDiscountPercent)
+          : 10;
+      let minOrderAmount =
+        order.voucherMinOrderAmount !== undefined &&
+        order.voucherMinOrderAmount !== null
+          ? Number(order.voucherMinOrderAmount)
+          : 0;
+      let maxDiscountAmount: number | null =
+        order.voucherMaxDiscountAmount !== undefined
+          ? order.voucherMaxDiscountAmount
+          : null;
+      if (
+        (order.voucherDiscountPercent === undefined ||
+          order.voucherDiscountPercent === null) &&
+        tx.discountCode?.findUnique
+      ) {
         const dbV = await tx.discountCode.findUnique({
           where: { code: order.discountCode },
         });

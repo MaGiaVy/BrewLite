@@ -4,7 +4,6 @@ import {
   Delete,
   Get,
   Param,
-  ParseIntPipe,
   Patch,
   Post,
   Request,
@@ -14,6 +13,7 @@ import { Role } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import { Roles } from '../auth/roles.decorator.js';
 import { RolesGuard } from '../auth/roles.guard.js';
+import { ParseInt32Pipe } from '../common/pipes/parse-int32.pipe.js';
 import {
   CreateIngredientDto,
   CreateToppingRecipeDto,
@@ -47,19 +47,21 @@ export class InventoryController {
     return this.inventoryService.updateGlobalSizePricing(dto);
   }
 
-  /** GET /inventory hoặc GET /inventory/ingredients — Danh sách tồn kho nguyên vật liệu kèm đơn giá nhập (ADMIN & STAFF) */
+  /** GET /inventory hoặc GET /inventory/ingredients — Danh sách tồn kho nguyên vật liệu (ẩn giá nhập với STAFF) */
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN, Role.STAFF)
   @Get()
-  getInventoryRoot() {
-    return this.inventoryService.getAllIngredients();
+  getInventoryRoot(@Request() req: any) {
+    const isAdmin = req?.user?.role === Role.ADMIN;
+    return this.inventoryService.getAllIngredients(isAdmin);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN, Role.STAFF)
   @Get('ingredients')
-  getAllIngredients() {
-    return this.inventoryService.getAllIngredients();
+  getAllIngredients(@Request() req: any) {
+    const isAdmin = req?.user?.role === Role.ADMIN;
+    return this.inventoryService.getAllIngredients(isAdmin);
   }
 
   /** POST /inventory/ingredients — Thêm nguyên vật liệu mới (Chỉ ADMIN) */
@@ -75,7 +77,7 @@ export class InventoryController {
   @Roles(Role.ADMIN)
   @Patch('ingredients/:id')
   updateIngredient(
-    @Param('id', ParseIntPipe) id: number,
+    @Param('id', ParseInt32Pipe) id: number,
     @Body() dto: UpdateIngredientDto,
   ) {
     return this.inventoryService.updateIngredient(id, dto);
@@ -85,7 +87,7 @@ export class InventoryController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN)
   @Delete('ingredients/:id')
-  deleteIngredient(@Param('id', ParseIntPipe) id: number) {
+  deleteIngredient(@Param('id', ParseInt32Pipe) id: number) {
     return this.inventoryService.deleteIngredient(id);
   }
 
@@ -101,8 +103,9 @@ export class InventoryController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN, Role.STAFF)
   @Get('recipes')
-  getRecipeMatrix() {
-    return this.inventoryService.getRecipeMatrix();
+  getRecipeMatrix(@Request() req: any) {
+    const isAdmin = req?.user?.role === Role.ADMIN;
+    return this.inventoryService.getRecipeMatrix(isAdmin);
   }
 
   /** POST /inventory/recipes — Thêm / Cập nhật định lượng nguyên liệu cho món (Chỉ ADMIN) */
@@ -118,7 +121,7 @@ export class InventoryController {
   @Roles(Role.ADMIN)
   @Patch('recipes/:id')
   updateRecipe(
-    @Param('id', ParseIntPipe) id: number,
+    @Param('id', ParseInt32Pipe) id: number,
     @Body() dto: UpdateRecipeDto,
   ) {
     return this.inventoryService.updateRecipe(id, dto);
@@ -128,7 +131,7 @@ export class InventoryController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN)
   @Delete('recipes/:id')
-  deleteRecipe(@Param('id', ParseIntPipe) id: number) {
+  deleteRecipe(@Param('id', ParseInt32Pipe) id: number) {
     return this.inventoryService.deleteRecipe(id);
   }
 
@@ -145,7 +148,7 @@ export class InventoryController {
   @Roles(Role.ADMIN)
   @Patch('topping-recipes/:id')
   updateToppingRecipe(
-    @Param('id', ParseIntPipe) id: number,
+    @Param('id', ParseInt32Pipe) id: number,
     @Body() dto: UpdateToppingRecipeDto,
   ) {
     return this.inventoryService.updateToppingRecipe(id, dto);
@@ -155,7 +158,7 @@ export class InventoryController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN)
   @Delete('topping-recipes/:id')
-  deleteToppingRecipe(@Param('id', ParseIntPipe) id: number) {
+  deleteToppingRecipe(@Param('id', ParseInt32Pipe) id: number) {
     return this.inventoryService.deleteToppingRecipe(id);
   }
 
@@ -180,7 +183,7 @@ export class InventoryController {
   @Roles(Role.ADMIN)
   @Patch('vouchers/:id')
   updateVoucher(
-    @Param('id', ParseIntPipe) id: number,
+    @Param('id', ParseInt32Pipe) id: number,
     @Body() dto: UpdateVoucherDto,
   ) {
     return this.inventoryService.updateVoucher(id, dto);
@@ -190,11 +193,11 @@ export class InventoryController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN)
   @Delete('vouchers/:id')
-  deleteVoucher(@Param('id', ParseIntPipe) id: number) {
+  deleteVoucher(@Param('id', ParseInt32Pipe) id: number) {
     return this.inventoryService.deleteVoucher(id);
   }
 
-  /** GET /inventory/dashboard — Thống kê quản trị (Yêu cầu ADMIN hoặc STAFF) */
+  /** GET /inventory/dashboard — Thống kê quản trị (Yêu cầu ADMIN) */
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN)
   @Get('dashboard')
@@ -207,7 +210,7 @@ export class InventoryController {
   @Roles(Role.ADMIN)
   @Patch('ingredients/:id/restock')
   restockIngredient(
-    @Param('id', ParseIntPipe) id: number,
+    @Param('id', ParseInt32Pipe) id: number,
     @Body() dto: RestockIngredientDto,
     @Request() req: any,
   ) {
@@ -220,7 +223,7 @@ export class InventoryController {
   @Roles(Role.ADMIN)
   @Patch('ingredients/:id/stock')
   setIngredientStock(
-    @Param('id', ParseIntPipe) id: number,
+    @Param('id', ParseInt32Pipe) id: number,
     @Body() dto: UpdateIngredientStockDto,
     @Request() req: any,
   ) {

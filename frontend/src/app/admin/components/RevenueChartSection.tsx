@@ -321,7 +321,7 @@ export default function RevenueChartSection({ allOrders, products }: Props) {
               Mặt Hàng Bán Ra
             </p>
             <p className="text-xl font-extrabold text-emerald-700 mt-1 font-mono">
-              {categoryStats.list.reduce((acc, c) => acc + c.quantity, 0)} ly
+              {categoryStats.list.reduce((acc, c) => acc + c.quantity, 0)} món
             </p>
             <p className="text-[11px] text-emerald-600 font-bold mt-0.5">
               Đa dạng trên 5 danh mục
@@ -578,7 +578,12 @@ export default function RevenueChartSection({ allOrders, products }: Props) {
                     </div>
 
                     <div className="flex items-center justify-between text-[11px] text-[#7A6A5E]">
-                      <span>Đã phục vụ: <strong>{cat.quantity} ly</strong></span>
+                      <span>
+                        Đã phục vụ:{" "}
+                        <strong>
+                          {cat.quantity} {cat.key === "bakery" ? "phần" : "ly"}
+                        </strong>
+                      </span>
                       <span>{cat.percent}% tổng doanh thu</span>
                     </div>
                   </div>
@@ -588,7 +593,7 @@ export default function RevenueChartSection({ allOrders, products }: Props) {
           </div>
 
           <div className="mt-4 pt-3 border-t border-[#F0EAE3] flex items-center justify-between text-xs font-bold text-[#2C1E18]">
-            <span>Tổng Doanh Số Đồ Uống:</span>
+            <span>Tổng Doanh Số Thực Đơn:</span>
             <span className="text-[#9E5A2B] font-mono text-sm">
               {categoryStats.totalCatRevenue.toLocaleString("vi-VN")}đ
             </span>

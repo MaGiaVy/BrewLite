@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useSyncExternalStore } from "react";
+import React, { useState, useRef, useEffect, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import {
   User,
@@ -31,6 +31,16 @@ export default function EditProfileModal({
   onSuccess,
 }: EditProfileModalProps) {
   const { user, refreshProfile } = useAuthStore();
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (closeTimerRef.current) {
+        clearTimeout(closeTimerRef.current);
+        closeTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const mounted = useSyncExternalStore(
     () => () => {},
@@ -159,7 +169,9 @@ export default function EditProfileModal({
       }
 
       // Tự động đóng modal sau 900ms để người dùng nhìn thấy thông báo thành công
-      setTimeout(() => {
+      if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = setTimeout(() => {
+        closeTimerRef.current = null;
         onClose();
       }, 900);
     } catch {

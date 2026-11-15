@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo, useSyncExternalStore } from "react";
+import React, { useState, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { Tag } from "lucide-react";
@@ -21,6 +21,12 @@ export default function LoyaltyDrawer({ isOpen, onClose }: LoyaltyDrawerProps) {
   const { setAppliedPromo, appliedPromo, cartTotal } = useCartStore();
 
   const [redeemedToast, setRedeemedToast] = useState<string | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    };
+  }, []);
   const mounted = useSyncExternalStore(
     () => () => {},
     () => true,
@@ -94,7 +100,8 @@ export default function LoyaltyDrawer({ isOpen, onClose }: LoyaltyDrawerProps) {
     try {
       await refreshProfile();
       setRedeemedToast("Đã cập nhật số Hạt Vàng hiện tại thành công!");
-      setTimeout(() => setRedeemedToast(null), 2500);
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = setTimeout(() => setRedeemedToast(null), 2500);
     } catch {
       // ignore
     } finally {
@@ -441,7 +448,8 @@ export default function LoyaltyDrawer({ isOpen, onClose }: LoyaltyDrawerProps) {
         onClose={() => setIsEditProfileOpen(false)}
         onSuccess={(msg) => {
           setRedeemedToast(msg);
-          setTimeout(() => setRedeemedToast(null), 3000);
+          if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+          toastTimerRef.current = setTimeout(() => setRedeemedToast(null), 3000);
           refreshProfile();
           setIsEditProfileOpen(false);
         }}

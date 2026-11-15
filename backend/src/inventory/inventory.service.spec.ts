@@ -481,72 +481,34 @@ describe('InventoryService — Sprint 4 (Admin BOM Warehouse, Full CRUD & Optimi
     });
   });
 
-  describe('FE-I4 — getDashboardStats expires stale >5m PENDING/PAYMENT_FAILED orders', () => {
-    it('cancels stale >5m PENDING orders via $transaction before reading recentOrders', async () => {
-      const staleOrder = {
+  describe('M-09 — getDashboardStats is read-only and returns full 7-day data without mutation', () => {
+    it('does not mutate PENDING orders in $transaction when reading dashboard stats', async () => {
+      const pendingOrder = {
         id: 501,
         status: 'PENDING',
+        totalAmount: 45000,
         discountCode: null,
+        discountAmount: 0,
         voucherDeducted: false,
         createdAt: new Date(Date.now() - 6 * 60 * 1000),
-        items: [{ productId: 1, size: 'M', toppings: [], quantity: 1 }],
+        items: [{ productId: 1, productName: 'Espresso', size: 'M', toppings: [], quantity: 1, unitPrice: 45000 }],
+        user: null,
       };
 
-      const mockTx = {
-        order: {
-          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
-        },
-        inventoryLog: {
-          findMany: vi.fn().mockResolvedValue([
-            {
-              ingredientId: 1,
-              ingredientName: 'Robusta',
-              unit: 'g',
-              changeAmount: -25,
-            },
-          ]),
-          create: vi.fn().mockResolvedValue({}),
-        },
-        ingredient: {
-          update: vi.fn().mockResolvedValue({
-            id: 1,
-            name: 'Robusta',
-            unit: 'g',
-            stock: 1025,
-          }),
-        },
-      };
-
-      mockPrisma.$transaction = vi.fn(async (cb: any) => cb(mockTx));
-      mockPrisma.order.findMany
-        .mockResolvedValueOnce([staleOrder])
-        .mockResolvedValueOnce([
-          {
-            id: 501,
-            status: 'CANCELLED',
-            totalAmount: 45000,
-            createdAt: staleOrder.createdAt,
-            items: [],
-            user: null,
-          },
-        ]);
+      mockPrisma.$transaction = vi.fn();
+      mockPrisma.order.findMany.mockResolvedValueOnce([pendingOrder]);
       mockPrisma.ingredient.findMany.mockResolvedValue([]);
       mockPrisma.storeSetting.findMany.mockResolvedValue([]);
       mockPrisma.discountCode.findMany.mockResolvedValue([]);
       mockPrisma.inventoryLog.findMany.mockResolvedValue([]);
       mockPrisma.recipe.findMany = vi.fn().mockResolvedValue([]);
+      mockPrisma.toppingRecipe.findMany = vi.fn().mockResolvedValue([]);
 
       const stats = await service.getDashboardStats();
 
-      expect(mockPrisma.$transaction).toHaveBeenCalledTimes(1);
-      expect(mockTx.order.updateMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { id: 501, status: 'PENDING' },
-          data: expect.objectContaining({ status: 'CANCELLED' }),
-        }),
-      );
-      expect(mockTx.ingredient.update).toHaveBeenCalled();
-      expect(stats.recentOrders[0].status).toBe('CANCELLED');
+      expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+      expect(stats.recentOrders[0].status).toBe('PENDING');
+      expect(stats.totalRevenue).toBe(0);
     });
 
     it('returns full 7-day chartOrders (>50) and full stats while capping recentOrders at 50', async () => {
@@ -595,7 +557,7 @@ describe('InventoryService — Sprint 4 (Admin BOM Warehouse, Full CRUD & Optimi
       expect(mockPrisma.order.findMany).toHaveBeenLastCalledWith(
         expect.objectContaining({
           where: { createdAt: { gte: expect.any(Date) } },
-          take: 1000,
+          orderBy: { createdAt: 'desc' },
         }),
       );
       expect(stats.recentOrders).toHaveLength(50);

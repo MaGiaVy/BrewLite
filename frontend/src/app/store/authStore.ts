@@ -232,10 +232,8 @@ export const useAuthStore = create<AuthState>()(
             method: "POST",
             body: JSON.stringify({
               points,
-              description,
-              voucherCode: voucherData?.code,
-              discountPercent: voucherData?.discountPercent,
-              minOrderAmount: voucherData?.minOrderAmount,
+              ...(description ? { description } : {}),
+              ...(voucherData?.code ? { voucherCode: voucherData.code } : {}),
             }),
           });
           const data = await res.json();

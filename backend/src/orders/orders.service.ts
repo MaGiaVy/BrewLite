@@ -16,6 +16,10 @@ import { fetchGlobalSizePricing } from '../inventory/inventory.service.js';
 
 import { computeRequiredIngredients, RequiredIngredientItem } from './bom.helper.js';
 import { expirePendingOrders, refundOrderResources } from './order-refund.helper.js';
+import {
+  findExactToppingGroup,
+  resolveOrderToppingOrThrow,
+} from './topping.helper.js';
 
 export type { RequiredIngredientItem };
 
@@ -124,9 +128,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
           })
         : Promise.resolve([]),
       (this.prisma as any).toppingRecipe?.findMany
-        ? (this.prisma as any).toppingRecipe.findMany({
-            where: { isActive: true },
-          })
+        ? (this.prisma as any).toppingRecipe.findMany()
         : Promise.resolve([]),
       fetchGlobalSizePricing(this.prisma),
     ]);
@@ -171,18 +173,12 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       let toppingSum = 0;
       if (Array.isArray(item.toppings) && item.toppings.length > 0) {
         for (const topStr of item.toppings) {
-          if (!topStr || !topStr.trim()) continue;
-          const lowerTop = topStr.toLowerCase().trim();
-          const matchedTopping = toppingRecipes.find(
-            (tr: any) =>
-              tr.toppingId?.toLowerCase() === lowerTop ||
-              tr.toppingName?.toLowerCase() === lowerTop ||
-              tr.toppingName?.toLowerCase().includes(lowerTop) ||
-              lowerTop.includes(tr.toppingName?.toLowerCase()),
+          const matchedTopping = resolveOrderToppingOrThrow(
+            toppingRecipes,
+            topStr,
+            { isBakery: matchedProduct.category === 'bakery' },
           );
-          toppingSum += matchedTopping
-            ? Number(matchedTopping.price ?? 8000)
-            : 8000;
+          toppingSum += Number(matchedTopping.price ?? 0);
         }
       }
 
@@ -218,6 +214,9 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       let discountAmount = 0;
       let appliedDiscountCode: string | null = null;
       let voucherDeducted = false;
+      let voucherDiscountPercent: number | null = null;
+      let voucherMinOrderAmount: number | null = null;
+      let voucherMaxDiscountAmount: number | null = null;
 
       if (dto.discountCode && dto.discountCode.trim()) {
         const code = dto.discountCode.trim().toUpperCase();
@@ -274,11 +273,21 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
 
           const rate = Number(personalVoucher.discountPercent || 0) / 100;
           const rawDiscount = Math.round(rawSubtotal * rate);
-          const maxCap = personalVoucher.maxDiscountAmount
-            ? Number(personalVoucher.maxDiscountAmount)
-            : Infinity;
+          const maxCap =
+            personalVoucher.maxDiscountAmount !== null &&
+            personalVoucher.maxDiscountAmount !== undefined &&
+            Number(personalVoucher.maxDiscountAmount) > 0
+              ? Number(personalVoucher.maxDiscountAmount)
+              : Infinity;
           discountAmount = Math.min(rawDiscount, maxCap, rawSubtotal);
           appliedDiscountCode = code;
+          voucherDiscountPercent = Number(personalVoucher.discountPercent ?? 0);
+          voucherMinOrderAmount = Number(personalVoucher.minOrderAmount ?? 0);
+          voucherMaxDiscountAmount =
+            personalVoucher.maxDiscountAmount !== null &&
+            personalVoucher.maxDiscountAmount !== undefined
+              ? Number(personalVoucher.maxDiscountAmount)
+              : null;
 
           // Khóa / trừ tạm 1 vé voucher cá nhân ngay bên trong transaction bằng updateMany nguyên tử
           const voucherModel = tx.userVoucher ?? (this.prisma as any).userVoucher;
@@ -335,11 +344,21 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
             }
             const rate = Number(dbVoucher.discountPercent || 0) / 100;
             const rawDiscount = Math.round(rawSubtotal * rate);
-            const maxCap = dbVoucher.maxDiscountAmount
-              ? Number(dbVoucher.maxDiscountAmount)
-              : Infinity;
+            const maxCap =
+              dbVoucher.maxDiscountAmount !== null &&
+              dbVoucher.maxDiscountAmount !== undefined &&
+              Number(dbVoucher.maxDiscountAmount) > 0
+                ? Number(dbVoucher.maxDiscountAmount)
+                : Infinity;
             discountAmount = Math.min(rawDiscount, maxCap, rawSubtotal);
             appliedDiscountCode = code;
+            voucherDiscountPercent = Number(dbVoucher.discountPercent ?? 0);
+            voucherMinOrderAmount = Number(dbVoucher.minOrderAmount ?? 0);
+            voucherMaxDiscountAmount =
+              dbVoucher.maxDiscountAmount !== null &&
+              dbVoucher.maxDiscountAmount !== undefined
+                ? Number(dbVoucher.maxDiscountAmount)
+                : null;
 
             if (tx.discountCode?.update) {
               await tx.discountCode.update({
@@ -358,8 +377,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
 
       const afterDiscount = Math.max(0, rawSubtotal - discountAmount);
       const vat = Math.floor(afterDiscount * 0.08);
-      // Làm tròn xuống hàng nghìn (ví dụ: 144.720đ -> 144.000đ)
-      const totalAmount = Math.floor((afterDiscount + vat) / 1000) * 1000;
+      const totalAmount = afterDiscount + vat;
 
       const requiredIngredients = await this.computeRequiredIngredients(
         tx,
@@ -460,6 +478,14 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
           discountAmount,
           voucherDeducted,
           userId,
+          ...(totalAmount === 0 ? { status: OrderStatus.PAID } : {}),
+          ...(appliedDiscountCode
+            ? {
+                voucherDiscountPercent,
+                voucherMinOrderAmount,
+                voucherMaxDiscountAmount,
+              }
+            : {}),
           ...(normalizedKey
             ? {
                 idempotencyKey: normalizedKey,
@@ -475,7 +501,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
               iceLevel: item.iceLevel ?? '100%',
               temperature: item.temperature ?? 'COLD',
               notes: item.notes ?? null,
-              toppings: item.toppings,
+              toppings: item.toppings ?? [],
               quantity: item.quantity,
               unitPrice: itemServerPrices[idx],
             })),
@@ -641,14 +667,12 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
 
         if (Array.isArray(item.toppings)) {
           for (const topStr of item.toppings) {
-            const lowerTop = topStr.toLowerCase();
-            const matchedTops = allToppingRecipes.filter(
-              (tr: any) =>
-                tr.toppingId.toLowerCase() === lowerTop ||
-                tr.toppingName.toLowerCase().includes(lowerTop) ||
-                lowerTop.includes(tr.toppingName.toLowerCase()),
+            const matchedGroup = findExactToppingGroup(
+              allToppingRecipes,
+              topStr,
+              { includeInactive: true },
             );
-            for (const tr of matchedTops) {
+            for (const tr of matchedGroup?.rows ?? []) {
               toppingBreakdown.push({
                 toppingName: tr.toppingName,
                 ingredientName: tr.ingredient.name,

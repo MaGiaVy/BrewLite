@@ -149,6 +149,7 @@ model User {
   isActive      Boolean       @default(true)
   role          Role          @default(CUSTOMER)
   loyaltyPoints Int           @default(0)   // Task 10: Điểm Hạt Vàng tích lũy
+  tokenVersion  Int           @default(0)
   createdAt     DateTime      @default(now())
   orders        Order[]
   vouchers      UserVoucher[]
@@ -175,9 +176,12 @@ model Order {
   user               User?       @relation(fields: [userId], references: [id])
   status             OrderStatus @default(PENDING)
   totalAmount        Float
-  discountCode       String?
-  discountAmount     Float       @default(0)
-  voucherDeducted    Boolean     @default(false)
+  discountCode            String?
+  discountAmount          Float       @default(0)
+  voucherDiscountPercent  Float?
+  voucherMinOrderAmount   Float?
+  voucherMaxDiscountAmount Float?
+  voucherDeducted         Boolean     @default(false)
   version            Int         @default(0)   // Task 10: Optimistic Locking
   idempotencyKey     String?
   idempotencyPayload String?

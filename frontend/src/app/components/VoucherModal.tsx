@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { Tag, Check, X, Sparkles, AlertCircle, ArrowRight, CheckCircle2, Ticket } from "lucide-react";
 import { VoucherItem } from "../cart/page";
 import { useAuthStore } from "../store/authStore";
@@ -123,12 +123,27 @@ export default function VoucherModal({
 
   const { user, isAuthenticated, redeemPoints } = useAuthStore();
   const points = user?.loyaltyPoints ?? 0;
+  const timersRef = useRef<Array<ReturnType<typeof setTimeout>>>([]);
+
+  useEffect(() => {
+    const timers = timersRef.current;
+    return () => {
+      timers.forEach(clearTimeout);
+      timers.length = 0;
+    };
+  }, []);
 
   if (!isOpen) return null;
 
+  const scheduleTimer = (fn: () => void, ms: number) => {
+    const id = setTimeout(fn, ms);
+    timersRef.current.push(id);
+    return id;
+  };
+
   const showToast = (type: "success" | "error", text: string) => {
     setToastMsg({ type, text });
-    setTimeout(() => setToastMsg(null), 3500);
+    scheduleTimer(() => setToastMsg(null), 3500);
   };
 
   const handleApplyVoucher = (v: VoucherItem) => {
@@ -143,7 +158,7 @@ export default function VoucherModal({
     }
     onSelectVoucher(v.code);
     showToast("success", `Đã áp dụng mã "${v.code}" (-${v.discountPercent}%) thành công!`);
-    setTimeout(() => {
+    scheduleTimer(() => {
       onClose();
     }, 600);
   };
@@ -182,7 +197,7 @@ export default function VoucherModal({
         );
         onSelectVoucher(reward.code);
         if (onRedeemSuccess) onRedeemSuccess(reward.code, qty);
-        setTimeout(() => {
+        scheduleTimer(() => {
           onClose();
         }, 1500);
       } else {

@@ -6,9 +6,13 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Matches,
   Max,
+  MaxLength,
   Min,
 } from 'class-validator';
+import { INT32_MAX } from '../../common/pipes/parse-int32.pipe.js';
+import { NoUnsafeHtml } from '../../common/validators/no-unsafe-html.validator.js';
 
 export class RestockIngredientDto {
   @IsNumber()
@@ -30,6 +34,8 @@ export class RestockIngredientDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(300)
+  @NoUnsafeHtml()
   note?: string;
 }
 
@@ -64,20 +70,31 @@ export class UpdateIngredientStockDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(300)
+  @NoUnsafeHtml()
   note?: string;
 }
 
 export class CreateIngredientDto {
   @IsString()
   @IsNotEmpty({ message: 'Mã nguyên vật liệu không được để trống' })
+  @Matches(/\S/, { message: 'Mã nguyên vật liệu không hợp lệ' })
+  @MaxLength(60)
+  @NoUnsafeHtml()
   code: string;
 
   @IsString()
   @IsNotEmpty({ message: 'Tên nguyên vật liệu không được để trống' })
+  @Matches(/\S/, { message: 'Tên nguyên vật liệu không hợp lệ' })
+  @MaxLength(120)
+  @NoUnsafeHtml()
   name: string;
 
   @IsString()
   @IsNotEmpty({ message: 'Đơn vị tính không được để trống' })
+  @Matches(/\S/, { message: 'Đơn vị tính không hợp lệ' })
+  @MaxLength(30)
+  @NoUnsafeHtml()
   unit: string;
 
   @IsNumber()
@@ -112,16 +129,25 @@ export class UpdateIngredientDto {
   @IsOptional()
   @IsString()
   @IsNotEmpty()
+  @Matches(/\S/)
+  @MaxLength(60)
+  @NoUnsafeHtml()
   code?: string;
 
   @IsOptional()
   @IsString()
   @IsNotEmpty()
+  @Matches(/\S/)
+  @MaxLength(120)
+  @NoUnsafeHtml()
   name?: string;
 
   @IsOptional()
   @IsString()
   @IsNotEmpty()
+  @Matches(/\S/)
+  @MaxLength(30)
+  @NoUnsafeHtml()
   unit?: string;
 
   @IsOptional()
@@ -156,9 +182,13 @@ export class UpdateIngredientDto {
 
 export class UpsertRecipeDto {
   @IsInt()
+  @Min(1)
+  @Max(INT32_MAX)
   productId: number;
 
   @IsInt()
+  @Min(1)
+  @Max(INT32_MAX)
   ingredientId: number;
 
   @IsString()
@@ -170,6 +200,7 @@ export class UpsertRecipeDto {
 
   @IsNumber()
   @Min(0.01, { message: 'Định lượng tiêu hao phải lớn hơn 0' })
+  @Max(100000, { message: 'Định lượng tiêu hao không vượt quá 100.000' })
   amount: number;
 }
 
@@ -183,24 +214,34 @@ export class UpdateRecipeDto {
 
   @IsNumber()
   @Min(0.01, { message: 'Định lượng tiêu hao phải lớn hơn 0' })
+  @Max(100000, { message: 'Định lượng tiêu hao không vượt quá 100.000' })
   amount: number;
 }
 
 export class CreateToppingRecipeDto {
   @IsString()
   @IsNotEmpty()
+  @Matches(/\S/)
+  @MaxLength(60)
+  @NoUnsafeHtml()
   toppingId: string;
 
   @IsString()
   @IsNotEmpty()
+  @Matches(/\S/)
+  @MaxLength(100)
+  @NoUnsafeHtml()
   toppingName: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(200)
+  @NoUnsafeHtml()
   subtext?: string;
 
-  @IsNumber()
+  @IsInt({ message: 'Giá topping phải là số nguyên (VNĐ)' })
   @Min(0)
+  @Max(100000000)
   price: number;
 
   @IsOptional()
@@ -208,25 +249,34 @@ export class CreateToppingRecipeDto {
   isActive?: boolean;
 
   @IsInt()
+  @Min(1)
+  @Max(INT32_MAX)
   ingredientId: number;
 
   @IsNumber()
   @Min(0.01)
+  @Max(100000)
   amount: number;
 }
 
 export class UpdateToppingRecipeDto {
   @IsOptional()
   @IsString()
+  @Matches(/\S/)
+  @MaxLength(100)
+  @NoUnsafeHtml()
   toppingName?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(200)
+  @NoUnsafeHtml()
   subtext?: string;
 
   @IsOptional()
-  @IsNumber()
+  @IsInt({ message: 'Giá topping phải là số nguyên (VNĐ)' })
   @Min(0)
+  @Max(100000000)
   price?: number;
 
   @IsOptional()
@@ -236,46 +286,57 @@ export class UpdateToppingRecipeDto {
   @IsOptional()
   @IsNumber()
   @Min(0.01)
+  @Max(100000)
   amount?: number;
 }
 
 export class UpdateSizePricingDto {
-  @IsNumber()
+  @IsInt({ message: 'Phụ thu Size S phải là số nguyên (VNĐ)' })
   @Min(0)
+  @Max(100000000)
   sizeS: number;
 
-  @IsNumber()
+  @IsInt({ message: 'Phụ thu Size M phải là số nguyên (VNĐ)' })
   @Min(0)
+  @Max(100000000)
   sizeM: number;
 
-  @IsNumber()
+  @IsInt({ message: 'Phụ thu Size L phải là số nguyên (VNĐ)' })
   @Min(0)
+  @Max(100000000)
   sizeL: number;
 }
 
 export class CreateVoucherDto {
   @IsString()
   @IsNotEmpty()
+  @Matches(/\S/)
+  @MaxLength(50)
+  @NoUnsafeHtml()
   code: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(200)
+  @NoUnsafeHtml()
   description?: string;
 
-  @IsNumber()
+  @IsInt({ message: 'Phần trăm giảm giá phải là số nguyên' })
   @Min(1)
   @Max(100)
   discountPercent: number;
 
   @IsOptional()
-  @IsNumber()
+  @IsInt({ message: 'Đơn tối thiểu phải là số nguyên (VNĐ)' })
   @Min(0)
+  @Max(1000000000)
   minOrderAmount?: number;
 
   @IsOptional()
-  @IsNumber()
+  @IsInt({ message: 'Mức giảm tối đa phải là số nguyên (VNĐ)' })
   @Min(0)
-  maxDiscountAmount?: number;
+  @Max(1000000000)
+  maxDiscountAmount?: number | null;
 
   @IsOptional()
   @IsBoolean()
@@ -285,27 +346,34 @@ export class CreateVoucherDto {
 export class UpdateVoucherDto {
   @IsOptional()
   @IsString()
+  @Matches(/\S/)
+  @MaxLength(50)
+  @NoUnsafeHtml()
   code?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(200)
+  @NoUnsafeHtml()
   description?: string;
 
   @IsOptional()
-  @IsNumber()
+  @IsInt({ message: 'Phần trăm giảm giá phải là số nguyên' })
   @Min(1)
   @Max(100)
   discountPercent?: number;
 
   @IsOptional()
-  @IsNumber()
+  @IsInt({ message: 'Đơn tối thiểu phải là số nguyên (VNĐ)' })
   @Min(0)
+  @Max(1000000000)
   minOrderAmount?: number;
 
   @IsOptional()
-  @IsNumber()
+  @IsInt({ message: 'Mức giảm tối đa phải là số nguyên (VNĐ)' })
   @Min(0)
-  maxDiscountAmount?: number;
+  @Max(1000000000)
+  maxDiscountAmount?: number | null;
 
   @IsOptional()
   @IsBoolean()

@@ -15,6 +15,7 @@ import {
 } from '@nestjs/common';
 import { Role } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
+import { ParseInt32Pipe } from '../common/pipes/parse-int32.pipe.js';
 import { CreatePaymentDto } from './dto/create-payment.dto.js';
 import { PaymentsService } from './payments.service.js';
 
@@ -72,7 +73,7 @@ export class PaymentsController {
   @HttpCode(HttpStatus.OK)
   createZaloPayOrder(
     @Request() req: AuthRequest,
-    @Body('orderId', ParseIntPipe) orderId: number,
+    @Body('orderId', ParseInt32Pipe) orderId: number,
   ) {
     return this.paymentsService.createZaloPayOrder(
       orderId,
@@ -98,7 +99,7 @@ export class PaymentsController {
   @HttpCode(HttpStatus.OK)
   getZaloPayStatus(
     @Request() req: AuthRequest,
-    @Param('orderId', ParseIntPipe) orderId: number,
+    @Param('orderId', ParseInt32Pipe) orderId: number,
     @Query('appTransId') appTransId?: string,
   ) {
     return this.paymentsService.getZaloPayStatus(
@@ -111,7 +112,7 @@ export class PaymentsController {
 
   /**
    * POST /payments/zalopay/confirm — Xác nhận thanh toán từ Cổng ZaloPay Sandbox Gateway
-   * Yêu cầu JWT Bearer Token; quyền sở hữu đơn hàng (hoặc ADMIN/STAFF) được kiểm tra ở tầng service.
+   * Yêu cầu JWT Bearer Token; chỉ chủ sở hữu đơn hàng (order.userId === req.user.userId) được phép xác nhận.
    */
   @UseGuards(JwtAuthGuard)
   @Post('zalopay/confirm')
@@ -147,7 +148,7 @@ export class PaymentsController {
   @HttpCode(HttpStatus.OK)
   cancelZaloPayOrder(
     @Request() req: AuthRequest,
-    @Body('orderId', ParseIntPipe) orderId: number,
+    @Body('orderId', ParseInt32Pipe) orderId: number,
   ) {
     // Bảo mật PAY-01 / BE-C1: Default-deny Sandbox cancel trừ khi ALLOW_SANDBOX_CONFIRM === 'true'
     this.assertSandboxConfirmAllowed(
