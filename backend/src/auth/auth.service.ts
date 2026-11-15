@@ -98,12 +98,16 @@ export class AuthService {
   // ─── Register ────────────────────────────────────────────────────────────────
 
   async register(dto: RegisterDto) {
-    const normalizedEmail = (dto.email || '').trim().toLowerCase();
+    const normalizedEmail =
+      typeof dto.email === 'string' ? dto.email.trim().toLowerCase() : '';
     if (!normalizedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
       throw new BadRequestException('Email không hợp lệ');
     }
     if (!dto.password || dto.password.length < 6) {
       throw new BadRequestException('Mật khẩu phải có ít nhất 6 ký tự');
+    }
+    if (!dto.password.trim()) {
+      throw new BadRequestException('Mật khẩu không được chỉ gồm khoảng trắng');
     }
     if (!dto.fullName || !dto.fullName.trim()) {
       throw new BadRequestException('Họ và tên không được để trống');
@@ -150,7 +154,8 @@ export class AuthService {
   // ─── Login ───────────────────────────────────────────────────────────────────
 
   async login(dto: LoginDto) {
-    const normalizedEmail = (dto.email || '').trim().toLowerCase();
+    const normalizedEmail =
+      typeof dto.email === 'string' ? dto.email.trim().toLowerCase() : '';
     const user = await this.prisma.user.findUnique({
       where: { email: normalizedEmail },
     });
@@ -188,6 +193,51 @@ export class AuthService {
     };
   }
 
+  // ─── Helper: Filter Active User Vouchers ─────────────────────────────────────
+
+  private async filterActiveUserVouchers<T extends { code?: string; quantity?: number }>(
+    vouchers: T[],
+    dbClient: any = this.prisma,
+  ): Promise<T[]> {
+    const validQty = Array.isArray(vouchers)
+      ? vouchers.filter((v) => (v?.quantity ?? 1) > 0)
+      : [];
+    if (validQty.length === 0) return [];
+    if (typeof dbClient?.discountCode?.findMany !== 'function') {
+      return validQty;
+    }
+
+    const codes = [
+      ...new Set(
+        validQty
+          .map((v) => v.code?.trim().toUpperCase())
+          .filter((code): code is string => Boolean(code)),
+      ),
+    ];
+    if (codes.length === 0) return validQty;
+
+    try {
+      const inactiveRows = await dbClient.discountCode.findMany({
+        where: {
+          code: { in: codes },
+          isActive: false,
+        },
+        select: { code: true },
+      });
+      if (!Array.isArray(inactiveRows) || inactiveRows.length === 0) {
+        return validQty;
+      }
+      const inactiveCodes = new Set(
+        inactiveRows.map((row: any) => String(row.code).trim().toUpperCase()),
+      );
+      return validQty.filter(
+        (v) => !v.code || !inactiveCodes.has(v.code.trim().toUpperCase()),
+      );
+    } catch {
+      return validQty;
+    }
+  }
+
   // ─── Get Profile ─────────────────────────────────────────────────────────────
 
   async getProfile(userId: number) {
@@ -200,7 +250,14 @@ export class AuthService {
       throw new NotFoundException('User không tồn tại');
     }
 
-    return safeUser(user);
+    const activeVouchers = await this.filterActiveUserVouchers(
+      (user as any).vouchers ?? [],
+    );
+
+    return safeUser({
+      ...user,
+      vouchers: activeVouchers,
+    });
   }
 
   // ─── Update Profile ──────────────────────────────────────────────────────────
@@ -228,7 +285,15 @@ export class AuthService {
 
     let newPasswordHash: string | undefined;
 
-    if (dto.newPassword) {
+    if (dto.newPassword !== undefined) {
+      if (typeof dto.newPassword !== 'string' || !dto.newPassword.trim()) {
+        throw new BadRequestException(
+          'Mật khẩu mới không được để trống hoặc chỉ gồm khoảng trắng',
+        );
+      }
+      if (dto.newPassword.length < 6) {
+        throw new BadRequestException('Mật khẩu mới phải có ít nhất 6 ký tự');
+      }
       if (!dto.currentPassword) {
         throw new BadRequestException(
           'Vui lòng nhập mật khẩu hiện tại để đổi mật khẩu mới',
@@ -246,7 +311,7 @@ export class AuthService {
       newPasswordHash = await bcrypt.hash(dto.newPassword, 10);
     }
 
-    return this.prisma.user.update({
+    const updatedUser = await this.prisma.user.update({
       where: { id: userId },
       data: {
         fullName: dto.fullName?.trim(),
@@ -265,15 +330,33 @@ export class AuthService {
         createdAt: true,
       },
     });
+
+    if (newPasswordHash) {
+      const nextTokenVersion = ((user as any).tokenVersion ?? 0) + 1;
+      const payload: JwtPayload = {
+        sub: updatedUser.id,
+        email: updatedUser.email,
+        role: updatedUser.role,
+        tokenVersion: nextTokenVersion,
+      };
+      const accessToken = this.jwtService.sign(payload);
+      return {
+        ...updatedUser,
+        accessToken,
+      };
+    }
+
+    return updatedUser;
   }
 
   // ─── Get User Vouchers ───────────────────────────────────────────────────────
 
   async getUserVouchers(userId: number) {
-    return (this.prisma as any).userVoucher.findMany({
-      where: { userId },
+    const vouchers = await (this.prisma as any).userVoucher.findMany({
+      where: { userId, quantity: { gt: 0 } },
       orderBy: { createdAt: 'desc' },
     });
+    return this.filterActiveUserVouchers(vouchers);
   }
 
   // ─── Redeem Loyalty Points ───────────────────────────────────────────────────
@@ -432,9 +515,10 @@ export class AuthService {
         }
       }
 
-      const allVouchers = await (tx as any).userVoucher.findMany({
-        where: { userId },
+      const rawVouchers = await (tx as any).userVoucher.findMany({
+        where: { userId, quantity: { gt: 0 } },
       });
+      const allVouchers = await this.filterActiveUserVouchers(rawVouchers, tx);
 
       const qty = userVoucher ? userVoucher.quantity : 1;
       const message = userVoucher

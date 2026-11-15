@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 
 const pushMock = vi.fn();
 const routerMock = {
@@ -168,5 +168,139 @@ describe("AdminPortalPage bakery 'phần' unit & dashboard rendering (M-09)", ()
     expect(screen.getByText(/✅ Phục vụ ~12 phần/i)).toBeInTheDocument();
     expect(screen.getByText(/• Đã bán: 8 ly/i)).toBeInTheDocument();
     expect(screen.getByText(/✅ Pha được ~20 ly/i)).toBeInTheDocument();
+  }, 20000);
+
+  it("chọn nhiều nguyên liệu theo size (ALL/S/M/L) trong modal Thêm món mới và gọi POST /inventory/recipes", async () => {
+    const createdProduct = {
+      id: 77,
+      name: "Cà Phê Trứng Hà Nội",
+      description: "",
+      imageUrl: "/images/products/ca-phe-sua.png",
+      basePrice: 45000,
+      sizeUpchargeM: null,
+      sizeUpchargeL: null,
+      category: "vietnamese",
+      tag: "Mới",
+      isActive: false,
+      isSoldOutManual: false,
+      isAvailable: false,
+      maxServings: 0,
+      soldCount: 0,
+    };
+    const productsList = [
+      {
+        id: 1,
+        name: "Bạc Xỉu",
+        description: "",
+        imageUrl: "/images/products/ca-phe-sua.png",
+        basePrice: 35000,
+        sizeUpchargeM: null,
+        sizeUpchargeL: null,
+        category: "vietnamese",
+        tag: null,
+        isActive: true,
+        isSoldOutManual: false,
+        isAvailable: true,
+        maxServings: 10,
+        soldCount: 2,
+      },
+    ];
+
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/inventory/ingredients") {
+        return new Response(
+          JSON.stringify([
+            {
+              id: 10,
+              code: "ING_COFFEE",
+              name: "Cà phê Robusta",
+              unit: "g",
+              stock: 1000,
+              minStock: 100,
+              costPerUnit: 500,
+              type: "INGREDIENT",
+            },
+            {
+              id: 11,
+              code: "ING_MILK",
+              name: "Sữa đặc",
+              unit: "ml",
+              stock: 2000,
+              minStock: 200,
+              costPerUnit: 200,
+              type: "INGREDIENT",
+            },
+          ]),
+          { status: 200 },
+        );
+      }
+      if (path === "/products?includeInactive=true") {
+        return new Response(JSON.stringify(productsList), { status: 200 });
+      }
+      if (path === "/products" && init?.method === "POST") {
+        productsList.unshift(createdProduct);
+        return new Response(JSON.stringify(createdProduct), { status: 201 });
+      }
+      if (path === "/inventory/recipes" && init?.method === "POST") {
+        return new Response(String(init.body), { status: 201 });
+      }
+      if (path === "/inventory/dashboard") {
+        return new Response(
+          JSON.stringify({ summary: {}, lowStockItems: [], recentOrders: [] }),
+          { status: 200 },
+        );
+      }
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+
+    render(<AdminPortalPage />);
+
+    const productsTabBtn = await screen.findByRole("button", {
+      name: /Quản Lý Thực Đơn/i,
+    });
+    fireEvent.click(productsTabBtn);
+
+    const openModalBtn = await screen.findByRole("button", {
+      name: /Thêm món mới/i,
+    });
+    fireEvent.click(openModalBtn);
+
+    fireEvent.change(screen.getByPlaceholderText("VD: Cold Brew Cam Sả"), {
+      target: { value: "Cà Phê Trứng Hà Nội" },
+    });
+    fireEvent.click(screen.getByText("+ Thêm nguyên liệu"));
+    fireEvent.change(screen.getByLabelText("Nguyên liệu 2"), {
+      target: { value: "11" },
+    });
+    fireEvent.change(screen.getByLabelText("Size 2"), {
+      target: { value: "L" },
+    });
+    fireEvent.change(screen.getByLabelText("Định lượng 2"), {
+      target: { value: "30" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Tạo món mới" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Cà Phê Trứng Hà Nội")).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      const recipeBodies = apiFetchMock.mock.calls
+        .filter(([p, i]) => p === "/inventory/recipes" && i?.method === "POST")
+        .map(([, i]) => JSON.parse(String(i?.body)));
+      expect(recipeBodies).toHaveLength(2);
+      expect(recipeBodies[0]).toMatchObject({
+        productId: 77,
+        ingredientId: 10,
+        size: "ALL",
+        amount: 20,
+      });
+      expect(recipeBodies[1]).toMatchObject({
+        productId: 77,
+        ingredientId: 11,
+        size: "L",
+        amount: 30,
+      });
+    });
   }, 20000);
 });

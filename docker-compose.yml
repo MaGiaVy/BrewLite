@@ -28,6 +28,7 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-brewlite}?schema=public
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env before starting Docker Compose}
       PORT: ${PORT:-3001}
+      ALLOW_MOCK_PAYMENT: ${ALLOW_MOCK_PAYMENT:-false}
       ALLOW_SANDBOX_CONFIRM: ${ALLOW_SANDBOX_CONFIRM:-false}
       ZALOPAY_APP_ID: '${ZALOPAY_APP_ID:-}'
       ZALOPAY_KEY1: '${ZALOPAY_KEY1:-}'

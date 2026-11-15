@@ -20,6 +20,7 @@ export class UpdateStaffDto {
 
   @IsString()
   @MinLength(6, { message: 'Mật khẩu phải có ít nhất 6 ký tự' })
+  @Matches(/\S/, { message: 'Mật khẩu không được chỉ gồm khoảng trắng' })
   @MaxLength(100, { message: 'Mật khẩu không được vượt quá 100 ký tự' })
   @IsOptional()
   password?: string;

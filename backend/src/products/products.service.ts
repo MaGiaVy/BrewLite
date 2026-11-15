@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { OrderStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import {
@@ -263,9 +263,13 @@ export class ProductsService {
   }
 
   async create(dto: CreateProductDto) {
+    const cleanName = dto.name?.trim();
+    if (!cleanName) {
+      throw new BadRequestException('Tên món không được để trống');
+    }
     const created = await this.prisma.product.create({
       data: {
-        name: dto.name.trim(),
+        name: cleanName,
         description: dto.description?.trim() || null,
         imageUrl: dto.imageUrl?.trim() || '/images/products/ca-phe-sua.png',
         basePrice: dto.basePrice,
@@ -291,6 +295,10 @@ export class ProductsService {
     const existing = await this.prisma.product.findUnique({ where: { id } });
     if (!existing) {
       throw new NotFoundException(`Không tìm thấy sản phẩm #${id}`);
+    }
+
+    if (dto.name !== undefined && !dto.name.trim()) {
+      throw new BadRequestException('Tên món không được để trống');
     }
 
     const updated = await this.prisma.product.update({

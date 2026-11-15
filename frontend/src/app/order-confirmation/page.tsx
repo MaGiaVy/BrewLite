@@ -1504,7 +1504,7 @@ function OrderConfirmationContent() {
                         </span>
                         <span>Điểm thưởng:</span>
                       </div>
-                      <span>Chưa thanh toán • Sẽ cộng sau khi thanh toán thành công</span>
+                      <span>Chưa thanh toán • Sẽ cộng khi đơn hoàn tất</span>
                     </div>
                   ) : (
                     <div className="pt-2 flex items-center justify-between text-[#78491d] text-[11px] font-semibold bg-[#ffdcc2]/50 px-4 py-1.5 rounded-lg">
@@ -1512,7 +1512,11 @@ function OrderConfirmationContent() {
                         <span className="material-symbols-outlined text-base text-[#845326]">
                           stars
                         </span>
-                        <span>Điểm thưởng tích lũy đơn này:</span>
+                        <span>
+                          {isCompleted
+                            ? "Điểm thưởng đã cộng đơn này:"
+                            : "Điểm thưởng nhận khi đơn hoàn tất:"}
+                        </span>
                       </div>
                       <span className="font-bold">
                         +{loyaltyPoints} Hạt Vàng BrewLite Club

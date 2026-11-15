@@ -278,6 +278,9 @@ export default function AdminPortalPage() {
   const [imageInputMode, setImageInputMode] = useState<
     "preset" | "upload" | "url"
   >("preset");
+  const [prodRecipeRows, setProdRecipeRows] = useState<
+    { ingredientId: number; size: string; amount: string }[]
+  >([]);
   const [prodIsActive, setProdIsActive] = useState<boolean>(true);
   const [prodIsSoldOutManual, setProdIsSoldOutManual] =
     useState<boolean>(false);
@@ -562,6 +565,9 @@ export default function AdminPortalPage() {
     setImageInputMode("preset");
     setProdIsActive(false);
     setProdIsSoldOutManual(false);
+    setProdRecipeRows([
+      { ingredientId: ingredients[0]?.id ?? 0, size: "ALL", amount: "20" },
+    ]);
     setIsProductModalOpen(true);
   };
 
@@ -645,6 +651,34 @@ export default function AdminPortalPage() {
       return;
     }
 
+    // API từ chối đặt món chưa có công thức BOM, nên bắt buộc chọn công thức khi tạo món
+    const recipeRows = !editingProduct
+      ? prodRecipeRows.map((r) => ({
+          ingredientId: r.ingredientId,
+          size: r.size,
+          amount: Number(r.amount),
+        }))
+      : [];
+    if (
+      !editingProduct &&
+      (recipeRows.length === 0 ||
+        recipeRows.some(
+          (r) =>
+            !r.ingredientId || !Number.isFinite(r.amount) || r.amount <= 0
+        ))
+    ) {
+      showToast("Vui lòng chọn nguyên liệu công thức và định lượng > 0!");
+      return;
+    }
+    if (
+      !editingProduct &&
+      new Set(recipeRows.map((r) => `${r.ingredientId}-${r.size}`)).size !==
+        recipeRows.length
+    ) {
+      showToast("Mỗi nguyên liệu chỉ được chọn một lần cho mỗi size!");
+      return;
+    }
+
     setIsSavingProduct(true);
     try {
       const payload = {
@@ -677,22 +711,30 @@ export default function AdminPortalPage() {
 
       const savedProduct = await res.json().catch(() => null);
       setIsProductModalOpen(false);
-      await fetchAdminData(true);
 
       if (!editingProduct && savedProduct) {
-        showToast(
-          `✅ Đã thêm món "${savedProduct.name || prodName.trim()}" (Mặc định ẨN). Mời bạn cấu hình công thức BOM.`
-        );
-        setActiveTab("recipes");
-        setFocusedProductIdForBom(savedProduct.id);
-        openAddBomModal(savedProduct);
-      } else {
-        showToast(
-          editingProduct
-            ? `✅ Đã cập nhật món "${prodName.trim()}"`
-            : `✅ Đã thêm món mới "${prodName.trim()}" vào thực đơn`
-        );
+        for (const row of recipeRows) {
+          const recipeRes = await apiFetch("/inventory/recipes", {
+            method: "POST",
+            body: JSON.stringify({ productId: savedProduct.id, ...row }),
+          });
+          if (!recipeRes.ok) {
+            const err = await recipeRes.json().catch(() => ({}));
+            await fetchAdminData(true);
+            showToast(
+              err.message || "Đã tạo món nhưng lưu công thức thất bại"
+            );
+            return;
+          }
+        }
       }
+
+      await fetchAdminData(true);
+      showToast(
+        editingProduct
+          ? `✅ Đã cập nhật món "${prodName.trim()}"`
+          : `✅ Đã thêm món "${savedProduct?.name || prodName.trim()}" thành công!`
+      );
     } catch (err: unknown) {
       showToast(err instanceof Error ? err.message : "Lỗi khi lưu sản phẩm");
     } finally {
@@ -4170,6 +4212,91 @@ export default function AdminPortalPage() {
                   </div>
                 </label>
               </div>
+
+              {!editingProduct && (
+                <div className="space-y-2">
+                  <label className="block text-xs font-bold text-[#423229] uppercase tracking-wider">
+                    Công thức (nguyên liệu / định lượng mỗi ly)
+                  </label>
+                  <div className="space-y-2">
+                    {prodRecipeRows.map((row, idx) => {
+                      const updateRow = (patch: Partial<typeof row>) =>
+                        setProdRecipeRows((prev) =>
+                          prev.map((r, i) => (i === idx ? { ...r, ...patch } : r))
+                        );
+                      return (
+                        <div key={idx} className="flex items-center gap-2">
+                          <select
+                            aria-label={`Nguyên liệu ${idx + 1}`}
+                            value={row.ingredientId}
+                            onChange={(e) =>
+                              updateRow({ ingredientId: Number(e.target.value) })
+                            }
+                            className="flex-1 rounded-xl border border-[#E6DDD5] bg-white px-3 py-2 text-sm text-[#1D1510] outline-none focus:border-[#845326]"
+                          >
+                            {ingredients.map((ing) => (
+                              <option key={ing.id} value={ing.id}>
+                                {ing.name} ({ing.unit})
+                              </option>
+                            ))}
+                          </select>
+                          <select
+                            aria-label={`Size ${idx + 1}`}
+                            value={row.size}
+                            onChange={(e) => updateRow({ size: e.target.value })}
+                            className="w-24 rounded-xl border border-[#E6DDD5] bg-white px-2.5 py-2 text-sm text-[#1D1510] outline-none focus:border-[#845326]"
+                          >
+                            <option value="ALL">Mọi size</option>
+                            <option value="S">S</option>
+                            <option value="M">M</option>
+                            <option value="L">L</option>
+                          </select>
+                          <input
+                            aria-label={`Định lượng ${idx + 1}`}
+                            type="number"
+                            min={1}
+                            value={row.amount}
+                            onChange={(e) =>
+                              updateRow({ amount: e.target.value })
+                            }
+                            className="w-24 rounded-xl border border-[#E6DDD5] bg-white px-2.5 py-2 text-sm text-[#1D1510] outline-none focus:border-[#845326]"
+                          />
+                          {prodRecipeRows.length > 1 && (
+                            <button
+                              type="button"
+                              aria-label={`Xóa nguyên liệu ${idx + 1}`}
+                              onClick={() =>
+                                setProdRecipeRows((prev) =>
+                                  prev.filter((_, i) => i !== idx)
+                                )
+                              }
+                              className="px-2 py-2 rounded-lg text-xs font-bold text-[#B91C1C] hover:bg-[#FEE2E2]"
+                            >
+                              ✕
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setProdRecipeRows((prev) => [
+                        ...prev,
+                        {
+                          ingredientId: ingredients[0]?.id ?? 0,
+                          size: "ALL",
+                          amount: "",
+                        },
+                      ])
+                    }
+                    className="text-xs font-semibold text-[#845326] hover:underline"
+                  >
+                    + Thêm nguyên liệu
+                  </button>
+                </div>
+              )}
 
               <div className="flex items-center justify-end gap-3 pt-4 border-t border-[#E6DDD5]">
                 <button

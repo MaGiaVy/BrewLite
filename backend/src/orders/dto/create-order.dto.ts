@@ -2,6 +2,7 @@ import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   ArrayMinSize,
+  ArrayUnique,
   IsArray,
   IsIn,
   IsInt,
@@ -60,6 +61,10 @@ export class OrderItemDto {
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(10, { message: 'Mỗi món chỉ được chọn tối đa 10 topping' })
+  @ArrayUnique(
+    (val: string) => (typeof val === 'string' ? val.trim().toLowerCase() : val),
+    { message: 'Danh sách topping không được trùng lặp' },
+  )
   @IsString({ each: true })
   @IsNotEmpty({ each: true, message: 'Tên topping không được để trống' })
   @Matches(/\S/, { each: true, message: 'Tên topping không được chỉ chứa khoảng trắng' })

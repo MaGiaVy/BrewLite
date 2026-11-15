@@ -1567,7 +1567,7 @@ function CheckoutContent() {
                 <div className="flex items-center gap-1.5 text-xs text-[#845326] font-semibold pt-1 border-t border-[#E5DACB]">
                   <Sparkles size={13} className="text-[#845326] shrink-0" />
                   <span>
-                    {`Tích lũy ngay +${loyaltyPoints} Hạt Vàng vào tài khoản BrewLite`.normalize(
+                    {`Nhận +${loyaltyPoints} Hạt Vàng khi đơn hoàn tất`.normalize(
                       "NFC"
                     )}
                   </span>

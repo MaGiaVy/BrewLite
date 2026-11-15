@@ -1,0 +1,283 @@
+{
+  "id": "brewlite-local-env-v2",
+  "name": "BrewLite Local Environment (Full 59 APIs)",
+  "values": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3001",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "max_response_time_ms",
+      "value": "500",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "customerEmail",
+      "value": "khach@brewlite.vn",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "customerPassword",
+      "value": "Password123",
+      "type": "secret",
+      "enabled": true
+    },
+    {
+      "key": "staffEmail",
+      "value": "staff@brewlite.vn",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "staffPassword",
+      "value": "123456",
+      "type": "secret",
+      "enabled": true
+    },
+    {
+      "key": "adminEmail",
+      "value": "admin@brewlite.vn",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "adminPassword",
+      "value": "Admin@123",
+      "type": "secret",
+      "enabled": true
+    },
+    {
+      "key": "registeredCustomerToken",
+      "value": "",
+      "type": "secret",
+      "enabled": true
+    },
+    {
+      "key": "registeredCustomerId",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "registeredCustomerEmail",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "customerToken",
+      "value": "",
+      "type": "secret",
+      "enabled": true
+    },
+    {
+      "key": "customerId",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "staffToken",
+      "value": "",
+      "type": "secret",
+      "enabled": true
+    },
+    {
+      "key": "adminToken",
+      "value": "",
+      "type": "secret",
+      "enabled": true
+    },
+    {
+      "key": "rootAdminId",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "demoDrinkId",
+      "value": "1",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "demoDrinkName",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "mvpOrderId",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "mvpPaymentId",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "idemOrderId",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "idemTestKey",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "idemPaymentId",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "failedOrderId",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "custCancelOrderId",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "loyaltyOrderId",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "tempStockIngId",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "tempStockProdId",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "tempStockRecipeId",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "zaloConfirmOrderId",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "zaloConfirmAppTransId",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "zaloCancelOrderId",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "zaloCancelAppTransId",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "createdProductId",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "origSizeS",
+      "value": "0",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "origSizeM",
+      "value": "5000",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "origSizeL",
+      "value": "10000",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "restockTargetIngId",
+      "value": "1",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "restockOrigStock",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "restockOrigCost",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "createdIngId",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "createdRecipeId",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "createdToppingId",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "createdVoucherId",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "createdStaffId",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "createdCustomerId",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    }
+  ],
+  "_postman_variable_scope": "environment"
+}

@@ -293,13 +293,13 @@ describe('ZaloPay Integration — Service & Controller Endpoints', () => {
       const resUndefined = await controller.handleZaloPayCallback(undefined as any);
       expect(resUndefined).toEqual({
         return_code: -1,
-        return_message: 'mac not equal',
+        return_message: 'invalid callback payload',
       });
 
       const resEmpty = await controller.handleZaloPayCallback({} as any);
       expect(resEmpty).toEqual({
         return_code: -1,
-        return_message: 'mac not equal',
+        return_message: 'invalid callback payload',
       });
     });
 

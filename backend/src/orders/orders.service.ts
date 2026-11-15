@@ -20,6 +20,7 @@ import {
   findExactToppingGroup,
   resolveOrderToppingOrThrow,
 } from './topping.helper.js';
+import { normalizeIdempotencyKey } from '../common/helpers/idempotency-key.helper.js';
 
 export type { RequiredIngredientItem };
 
@@ -93,7 +94,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
   }
 
   async createOrder(dto: CreateOrderDto, userId: number, idempotencyKey?: string) {
-    const normalizedKey = idempotencyKey?.trim() || undefined;
+    const normalizedKey = normalizeIdempotencyKey(idempotencyKey);
     const payloadSnapshot = normalizedKey ? this.serializeOrderPayload(dto) : undefined;
 
     if (userId && normalizedKey && this.prisma.order?.findUnique) {
@@ -151,6 +152,15 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       if (matchedProduct.isSoldOutManual === true) {
         throw new BadRequestException(
           `Sản phẩm "${matchedProduct.name}" hiện đang tạm ngưng phục vụ (Hết hàng). Vui lòng chọn món khác.`,
+        );
+      }
+
+      if (
+        Array.isArray(matchedProduct.recipes) &&
+        matchedProduct.recipes.length === 0
+      ) {
+        throw new BadRequestException(
+          `Sản phẩm "${matchedProduct.name}" chưa được cấu hình công thức pha chế. Vui lòng liên hệ nhân viên.`,
         );
       }
 
@@ -245,6 +255,18 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
             );
           }
 
+          const discountModelForPersonal = tx.discountCode?.findUnique
+            ? tx.discountCode
+            : (this.prisma as any).discountCode;
+          const linkedDiscount = discountModelForPersonal?.findUnique
+            ? await discountModelForPersonal.findUnique({ where: { code } })
+            : null;
+          if (linkedDiscount && linkedDiscount.isActive === false) {
+            throw new BadRequestException(
+              `Mã giảm giá "${code}" hiện đang tạm ngưng áp dụng.`,
+            );
+          }
+
           const countModel = tx.order?.count ? tx.order : (this.prisma as any).order;
           if (countModel?.count) {
             const pendingWithVoucher = await countModel.count({
@@ -334,6 +356,28 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
                 `Mã giảm giá "${code}" hiện đang tạm ngưng áp dụng.`,
               );
             }
+            if (!userId) {
+              throw new BadRequestException(
+                'Vui lòng đăng nhập để sử dụng mã giảm giá.',
+              );
+            }
+            const countModel = tx.order?.count
+              ? tx.order
+              : (this.prisma as any).order;
+            if (countModel?.count) {
+              const usedCount = await countModel.count({
+                where: {
+                  userId,
+                  discountCode: code,
+                  status: { not: OrderStatus.CANCELLED },
+                },
+              });
+              if (usedCount > 0) {
+                throw new BadRequestException(
+                  `Bạn đã sử dụng mã giảm giá "${code}" cho một đơn hàng khác.`,
+                );
+              }
+            }
             if (
               dbVoucher.minOrderAmount &&
               rawSubtotal < Number(dbVoucher.minOrderAmount)
@@ -382,6 +426,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       const requiredIngredients = await this.computeRequiredIngredients(
         tx,
         dto.items,
+        { requireRecipeForEachItem: true },
       );
 
       requiredIngredients.sort((a, b) => a.ingredientId - b.ingredientId);
@@ -879,57 +924,6 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
           notePrefix: 'Hoàn kho do hủy đơn hàng',
         });
 
-        // Nếu hủy từ trạng thái PAID -> thu hồi điểm Loyalty đã cộng bằng CAS atomic
-        if (
-          previousStatus === OrderStatus.PAID &&
-          order.userId &&
-          tx.user
-        ) {
-          const pointsToRevoke = Math.floor(
-            order.totalAmount / POINTS_PER_VND,
-          );
-          if (pointsToRevoke > 0) {
-            if (typeof tx.user.updateMany === 'function') {
-              const decRes = await tx.user.updateMany({
-                where: {
-                  id: order.userId,
-                  loyaltyPoints: { gte: pointsToRevoke },
-                },
-                data: {
-                  loyaltyPoints: { decrement: pointsToRevoke },
-                },
-              });
-              if ((decRes?.count ?? 0) === 0) {
-                await tx.user.updateMany({
-                  where: {
-                    id: order.userId,
-                    loyaltyPoints: { gt: 0, lt: pointsToRevoke },
-                  },
-                  data: {
-                    loyaltyPoints: 0,
-                  },
-                });
-              }
-            } else {
-              let currentPoints = 0;
-              if (typeof tx.user.findUnique === 'function') {
-                const currentUser = await tx.user.findUnique({
-                  where: { id: order.userId },
-                  select: { loyaltyPoints: true },
-                });
-                currentPoints = currentUser?.loyaltyPoints || 0;
-              }
-              const newPoints = Math.max(0, currentPoints - pointsToRevoke);
-              await tx.user.update({
-                where: { id: order.userId },
-                data: {
-                  loyaltyPoints: newPoints,
-                },
-              });
-            }
-          }
-        }
-
         const updatedRecord = tx.order?.findUnique
           ? await tx.order.findUnique({ where: { id: orderId } })
           : null;
@@ -978,14 +972,33 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
           ? await tx.order.findUnique({ where: { id: orderId } })
           : null;
 
-        return (
+        const targetUserId = updatedRecord?.userId ?? order.userId;
+        const orderTotal = Number(
+          updatedRecord?.totalAmount ?? order.totalAmount ?? 0,
+        );
+        const pointsEarned =
+          targetUserId && Number.isFinite(orderTotal) && orderTotal > 0
+            ? Math.floor(orderTotal / POINTS_PER_VND)
+            : 0;
+
+        if (pointsEarned > 0 && targetUserId && tx.user?.update) {
+          await tx.user.update({
+            where: { id: targetUserId },
+            data: { loyaltyPoints: { increment: pointsEarned } },
+          });
+          this.logger.log(
+            `[Loyalty] Đơn #${orderId}: Cộng ${pointsEarned} Hạt Vàng cho User #${targetUserId} khi đơn hoàn tất (COMPLETED)`,
+          );
+        }
+
+        const resultRecord =
           updatedRecord || {
             id: orderId,
             status: nextStatus,
             ...staffData,
             updatedAt: new Date(),
-          }
-        );
+          };
+        return { ...resultRecord, pointsEarned };
       });
 
       return {
@@ -995,6 +1008,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
         updatedAt: updated.updatedAt,
         staffId: (updated as any).staffId,
         staffName: (updated as any).staffName,
+        pointsEarned: (updated as any).pointsEarned ?? 0,
       };
     }
 
@@ -1020,6 +1034,22 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       where: { id: orderId },
     });
 
+    let pointsEarned = 0;
+    if (nextStatus === OrderStatus.COMPLETED) {
+      const targetUserId = updated?.userId ?? order.userId;
+      const orderTotal = Number(updated?.totalAmount ?? order.totalAmount ?? 0);
+      pointsEarned =
+        targetUserId && Number.isFinite(orderTotal) && orderTotal > 0
+          ? Math.floor(orderTotal / POINTS_PER_VND)
+          : 0;
+      if (pointsEarned > 0 && targetUserId && (this.prisma as any).user?.update) {
+        await (this.prisma as any).user.update({
+          where: { id: targetUserId },
+          data: { loyaltyPoints: { increment: pointsEarned } },
+        });
+      }
+    }
+
     return {
       orderId: updated?.id ?? orderId,
       previousStatus,
@@ -1027,6 +1057,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       updatedAt: updated?.updatedAt ?? new Date(),
       staffId: (updated as any)?.staffId ?? staffData.staffId,
       staffName: (updated as any)?.staffName ?? staffData.staffName,
+      ...(nextStatus === OrderStatus.COMPLETED ? { pointsEarned } : {}),
     };
   }
 
@@ -1093,10 +1124,9 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       throw new NotFoundException(`Không tìm thấy đơn hàng với mã #${orderId}`);
     }
 
-    const isStaffOrAdmin =
-      userRole === Role.STAFF || userRole === Role.ADMIN;
+    const isAdmin = userRole === Role.ADMIN;
 
-    if (!isStaffOrAdmin && (order.userId === null || order.userId !== userId)) {
+    if (!isAdmin && (order.userId === null || order.userId !== userId)) {
       throw new ForbiddenException('Bạn không có quyền xóa đơn hàng này');
     }
 

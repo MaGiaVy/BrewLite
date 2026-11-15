@@ -64,6 +64,23 @@ export class ZaloPayService {
       process.env.ZALOPAY_CALLBACK_URL || 'http://localhost:3001/payments/zalopay/callback';
   }
 
+  private assertConfigured(): void {
+    if (process.env.NODE_ENV === 'production' && (!this.key1?.trim() || !this.key2?.trim())) {
+      throw new Error(
+        'Missing ZALOPAY_KEY1 or ZALOPAY_KEY2 in production environment.',
+      );
+    }
+    if (
+      process.env.NODE_ENV === 'production' &&
+      process.env.ALLOW_SANDBOX_CONFIRM !== 'true' &&
+      !process.env.ZALOPAY_KEY2?.trim()
+    ) {
+      throw new Error(
+        'Missing ZALOPAY_KEY1 or ZALOPAY_KEY2 in production environment.',
+      );
+    }
+  }
+
   /**
    * Sinh mã giao dịch app_trans_id theo định dạng chuẩn yymmdd_xxxx của ZaloPay
    */
@@ -184,7 +201,13 @@ export class ZaloPayService {
    * Sử dụng timingSafeEqual để chống Timing Attack
    */
   verifyCallback(dataStr: string, requestMac: string): boolean {
-    if (typeof dataStr !== 'string' || typeof requestMac !== 'string') {
+    this.assertConfigured();
+    if (
+      typeof dataStr !== 'string' ||
+      typeof requestMac !== 'string' ||
+      !dataStr.trim() ||
+      !requestMac.trim()
+    ) {
       return false;
     }
     const computedMac = createHmac('sha256', this.key2).update(dataStr).digest('hex');

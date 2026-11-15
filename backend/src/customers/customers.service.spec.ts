@@ -260,6 +260,7 @@ describe('CustomersService — Admin Customer Management API', () => {
         service.createCustomer({
           email: 'duplicate@example.com',
           fullName: 'Trùng Email',
+          password: 'Password123',
         }),
       ).rejects.toThrow(BadRequestException);
 

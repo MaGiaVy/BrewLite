@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import { findExactToppingGroup } from './topping.helper.js';
 
 export interface RequiredIngredientItem {
@@ -25,6 +26,7 @@ export async function computeRequiredIngredients(
     toppings?: string[];
     quantity: number;
   }>,
+  options?: { requireRecipeForEachItem?: boolean },
 ): Promise<RequiredIngredientItem[]> {
   if (!tx.recipe || !tx.ingredient) {
     return [];
@@ -68,6 +70,15 @@ export async function computeRequiredIngredients(
   const productMap = new Map<number, any>(
     (products || []).map((p: any) => [p.id, p]),
   );
+  let hasConfiguredRecipes = Array.isArray(recipes) && recipes.length > 0;
+  if (
+    options?.requireRecipeForEachItem &&
+    !hasConfiguredRecipes &&
+    typeof tx.recipe?.count === 'function'
+  ) {
+    const totalRecipes = await tx.recipe.count();
+    hasConfiguredRecipes = totalRecipes > 0;
+  }
   const auxPkgMap = new Map<string, any>(
     (auxPackaging || []).map((ing: any) => [ing.code, ing]),
   );
@@ -106,6 +117,16 @@ export async function computeRequiredIngredients(
         r.productId === item.productId &&
         (r.size === normalizedSize || r.size === 'ALL'),
     );
+
+    if (
+      options?.requireRecipeForEachItem &&
+      hasConfiguredRecipes &&
+      matchedRecipes.length === 0
+    ) {
+      throw new BadRequestException(
+        `Sản phẩm #${item.productId} (size ${normalizedSize}) chưa được cấu hình công thức pha chế. Vui lòng liên hệ nhân viên.`,
+      );
+    }
 
     for (const r of matchedRecipes) {
       addRequirement(r.ingredient, r.amount * item.quantity, true);

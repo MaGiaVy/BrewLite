@@ -646,13 +646,8 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
           version: { increment: 1 },
         },
       });
-      // Thu hồi 84 điểm Hạt Vàng (100 - 84 = 16)
-      expect(mockTx.user.update).toHaveBeenCalledWith({
-        where: { id: 5 },
-        data: {
-          loyaltyPoints: 16,
-        },
-      });
+      // Điểm Hạt Vàng chỉ cộng khi COMPLETED nên hủy đơn PAID không thu hồi điểm
+      expect(mockTx.user.update).not.toHaveBeenCalled();
     });
   });
 
@@ -1489,12 +1484,12 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
       );
     });
 
-    it('[HIGH-05] chặn sàn số dư điểm Hạt Vàng không bao giờ bị âm khi hủy đơn hàng', async () => {
+    it('[HIGH-05] hủy đơn PAID không thu hồi điểm Hạt Vàng vì điểm chỉ cộng khi COMPLETED', async () => {
       prisma.order.findUnique.mockResolvedValue({
         id: 109,
         userId: 7,
         status: OrderStatus.PAID,
-        totalAmount: 100000, // 100 điểm cần thu hồi
+        totalAmount: 100000,
         items: [],
       });
 
@@ -1503,7 +1498,7 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
         toppingRecipe: { findMany: vi.fn().mockResolvedValue([]) },
         ingredient: { update: vi.fn().mockResolvedValue({}) },
         user: {
-          findUnique: vi.fn().mockResolvedValue({ loyaltyPoints: 30 }), // Chỉ còn 30 điểm
+          findUnique: vi.fn().mockResolvedValue({ loyaltyPoints: 30 }),
           update: vi.fn().mockResolvedValue({}),
         },
         order: {
@@ -1520,13 +1515,7 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
 
       await service.updateOrderStatus(109, OrderStatus.CANCELLED, 99, Role.STAFF);
 
-      // Điểm thu hồi 100 > số dư 30 -> số dư sàn về 0
-      expect(mockTx.user.update).toHaveBeenCalledWith({
-        where: { id: 7 },
-        data: {
-          loyaltyPoints: 0,
-        },
-      });
+      expect(mockTx.user.update).not.toHaveBeenCalled();
     });
 
     it('[HIGH-04] luôn gán cứng productName từ CSDL chống giả mạo tên món trong CreateOrderDto', async () => {
@@ -2762,12 +2751,12 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
       );
     });
 
-    it('[BE-I2] updateOrderStatus PAID -> CANCELLED uses atomic user.updateMany CAS clawback and clamps at 0', async () => {
+    it('[BE-I2] updateOrderStatus PAID -> CANCELLED does not touch loyalty points and READY -> COMPLETED awards points', async () => {
       prisma.order.findUnique.mockResolvedValue({
         id: 907,
         userId: 5,
         status: OrderStatus.PAID,
-        totalAmount: 84000, // 84 points
+        totalAmount: 84000,
         items: [],
       });
 
@@ -2777,7 +2766,7 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
           findUnique: vi.fn().mockResolvedValue({ id: 907, status: OrderStatus.CANCELLED, updatedAt: new Date() }),
         },
         user: {
-          updateMany: vi.fn().mockResolvedValueOnce({ count: 0 }).mockResolvedValueOnce({ count: 1 }),
+          updateMany: vi.fn(),
           findUnique: vi.fn(),
           update: vi.fn(),
         },
@@ -2786,16 +2775,34 @@ describe('OrdersService — Task 10 & Sprint 4 (State Machine, BOM Inventory Opt
 
       await service.updateOrderStatus(907, OrderStatus.CANCELLED, 99, Role.STAFF);
 
-      expect(mockTx.user.updateMany).toHaveBeenNthCalledWith(1, {
-        where: { id: 5, loyaltyPoints: { gte: 84 } },
-        data: { loyaltyPoints: { decrement: 84 } },
-      });
-      expect(mockTx.user.updateMany).toHaveBeenNthCalledWith(2, {
-        where: { id: 5, loyaltyPoints: { gt: 0, lt: 84 } },
-        data: { loyaltyPoints: 0 },
-      });
+      expect(mockTx.user.updateMany).not.toHaveBeenCalled();
       expect(mockTx.user.findUnique).not.toHaveBeenCalled();
       expect(mockTx.user.update).not.toHaveBeenCalled();
+
+      prisma.order.findUnique.mockResolvedValueOnce({
+        id: 908,
+        userId: 5,
+        status: OrderStatus.READY,
+        totalAmount: 84000,
+        items: [],
+      });
+      const completeTx = {
+        order: {
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+          findUnique: vi.fn().mockResolvedValue({ id: 908, status: OrderStatus.COMPLETED, updatedAt: new Date() }),
+        },
+        user: {
+          update: vi.fn().mockResolvedValue({ id: 5, loyaltyPoints: 84 }),
+        },
+      };
+      prisma.$transaction.mockImplementationOnce(async (cb: any) => cb(completeTx));
+
+      await service.updateOrderStatus(908, OrderStatus.COMPLETED, 99, Role.STAFF);
+
+      expect(completeTx.user.update).toHaveBeenCalledWith({
+        where: { id: 5 },
+        data: { loyaltyPoints: { increment: 84 } },
+      });
     });
 
     it('[BE-I2] updateOrderStatus READY -> COMPLETED does not deduct UserVoucher when voucherDeducted is false', async () => {

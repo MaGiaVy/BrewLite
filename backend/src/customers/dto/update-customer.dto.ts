@@ -23,6 +23,7 @@ export class UpdateCustomerDto {
   phone?: string;
 
   @IsString({ message: 'Mật khẩu phải là chuỗi ký tự' })
+  @Matches(/\S/, { message: 'Mật khẩu không được chỉ gồm khoảng trắng' })
   @MinLength(6, { message: 'Mật khẩu phải có ít nhất 6 ký tự' })
   @MaxLength(100, { message: 'Mật khẩu không được vượt quá 100 ký tự' })
   @IsOptional()

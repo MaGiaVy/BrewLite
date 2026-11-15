@@ -21,6 +21,7 @@ export class RedeemPointsDto {
   @IsNotEmpty({ message: 'Vui lòng chọn mã voucher cần đổi' })
   @Matches(/\S/, { message: 'Mã voucher không được để trống' })
   @MaxLength(50, { message: 'Mã voucher không được vượt quá 50 ký tự' })
+  @NoUnsafeHtml()
   voucherCode: string;
 
   @IsOptional()
