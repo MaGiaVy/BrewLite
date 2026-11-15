@@ -1,6 +1,6 @@
 # BrewLite ☕ — Cashless Coffee Ordering System
 
-Ứng dụng web đặt và thanh toán cà phê không dùng tiền mặt, xây dựng theo mô hình **Agile Scrum (Sprint 1 – Sprint 3)** với giao diện người dùng hiện đại, tối ưu trải nghiệm và tương thích đa thiết bị.
+Ứng dụng web đặt và thanh toán cà phê không dùng tiền mặt, xây dựng theo mô hình **Agile Scrum (Sprint 1 – Sprint 5)** với giao diện người dùng hiện đại, phân quyền RBAC, quản lý kho BOM/COGS và kiểm soát bảo mật toàn diện.
 
 ---
 
@@ -17,7 +17,7 @@
 7. [Mã Giảm Giá (Vouchers) & Quy Tắc Tích Điểm Hạt Vàng](#-mã-giảm-giá-vouchers--quy-tắc-tích-điểm-hạt-vàng)
 8. [Chạy Kiểm Thử Tự Động (Unit Tests)](#-chạy-kiểm-thử-tự-động-unit-tests)
 9. [Danh Mục REST API Endpoints Chính](#-danh-mục-rest-api-endpoints-chính)
-10. [Bảng Tiến Độ Agile Scrum (Sprint 1 – Sprint 3)](#-bảng-tiến-độ-agile-scrum-sprint-1--sprint-3)
+10. [Bảng Tiến Độ Agile Scrum (Sprint 1 – Sprint 5)](#-bảng-tiến-độ-agile-scrum-sprint-1--sprint-5)
 11. [Xử Lý Lỗi Thường Gặp (Troubleshooting)](#-xử-lý-lỗi-thường-gặp-troubleshooting)
 
 ---
@@ -41,8 +41,8 @@
 | **Frontend** | Next.js (App Router, Turbopack) | React 19, TypeScript, TailwindCSS v4, Zustand | Giao diện hiện đại, trực quan, responsive |
 | **Backend** | NestJS | TypeScript, REST API, Passport JWT, class-validator | Kiến trúc Modular, Dependency Injection |
 | **Database & ORM** | PostgreSQL 16 & Prisma ORM | Prisma 6, Prisma Client, ACID Transactions | Quan hệ 1-N, N-N, Indexing, Optimistic Concurrency |
-| **Payment Gateway** | Mock Payment Gateway Service | MoMo, NAPAS, Visa/MasterCard, Apple Pay, Google Wallet | Hỗ trợ cờ thử nghiệm lỗi `simulateFailure` |
-| **Unit Testing** | Vitest | 191 unit tests toàn diện (17 test suites) | Bao phủ 100% luồng nghiệp vụ & bảo mật Backend |
+| **Payment Gateway** | ZaloPay Sandbox & Mock Payment Gateway | Hỗ trợ thanh toán QR Sandbox (HMAC Key2) & giả lập `simulateFailure` |
+| **Unit Testing** | Vitest (Backend & Frontend) | 17 test suites Backend + 6 test suites Frontend (`jsdom`) | Bao phủ nghiệp vụ, bảo mật RBAC/CAS & UI components |
 | **Containerization** | Docker & Docker Compose | Multi-stage build | Đóng gói PostgreSQL, Backend và Frontend |
 
 ---
@@ -308,20 +308,25 @@ Sau khi chạy lệnh `prisma db seed`, hệ thống đã có sẵn tài khoản
 
 ## 🔬 Chạy Kiểm Thử Tự Động (Unit Tests)
 
-Hệ thống được trang bị bộ kiểm thử tự động toàn diện viết bằng **Vitest** với **191/191 test cases (17 test suites)** đều vượt qua (100% Passed):
+Hệ thống được trang bị bộ kiểm thử tự động viết bằng **Vitest** cho cả Backend (**17 test suites** trong `backend/src/**/*.spec.ts`) và Frontend (**6 test suites** với `jsdom` trong `frontend/src/**/*.spec.*`):
 
 ```bash
-# Di chuyển vào thư mục backend và chạy test:
+# Chạy unit tests Backend:
 cd backend
+npm test
+
+# Chạy unit tests Frontend:
+cd frontend
 npm test
 ```
 
 ### Các nhóm nghiệp vụ được kiểm thử tự động:
-1. **Order Finite State Machine Guard:** Kiểm thử ma trận chuyển trạng thái hợp lệ (`PENDING → PAID → PREPARING → READY → COMPLETED`) và chặn các hành vi chuyển trạng thái sai hoặc can thiệp đơn đã kết thúc (`CANCELLED`, `COMPLETED`).
-2. **Payment Idempotency Control:** Kiểm thử chống trùng lặp thanh toán khi gửi cùng một `Idempotency-Key`, kiểm thử cho phép thử lại nếu giao dịch trước đó thất bại (`FAILED`).
-3. **Optimistic Concurrency Control:** Giả lập 2 request thanh toán gửi tới đồng thời cho cùng một đơn hàng, kiểm tra hệ thống phát hiện xung đột phiên bản `version` và trả về `409 ConflictException`.
-4. **Loyalty Points Accumulation:** Kiểm thử tính đúng số Hạt Vàng được tích lũy sau khi thanh toán thành công, kiểm thử bỏ qua đơn khách vãng lai hoặc đơn không hợp lệ.
-5. **Voucher Discount Calculation:** Kiểm thử tính toán trừ phần trăm cho các mã `BREW10`, `BREWCOZY`, `BREW20` và từ chối mã không tồn tại.
+1. **Order Finite State Machine Guard:** Kiểm thử ma trận chuyển trạng thái hợp lệ (`PENDING → PAID → PREPARING → READY → COMPLETED`), chặn chuyển sai trình tự hoặc nhảy cóc sang `PAID` qua `PATCH`.
+2. **Payment Idempotency & ZaloPay Sandbox:** Kiểm thử chống trùng lặp thanh toán (`Idempotency-Key`), xác thực chữ ký HMAC Key2, đối chiếu `amount` và cô lập endpoint sandbox theo biến môi trường.
+3. **Concurrency Control & Auto-Expire:** Kiểm thử Optimistic Locking (`version`) / Atomic CAS Guard khi tạo đơn, hủy đơn, cập nhật kho và cơ chế tự động hoàn kho đơn `PENDING`/`PAYMENT_FAILED` quá hạn 5 phút.
+4. **Auth, RBAC & Anti-IDOR:** Kiểm thử phân quyền `CUSTOMER`/`STAFF`/`ADMIN`, bảo vệ Root Admin, kiểm tra `isActive` thời gian thực trong `JwtStrategy` và chặn truy cập trái phép đơn vãng lai.
+5. **BOM, Packaging & Loyalty/Vouchers:** Kiểm thử định lượng nguyên liệu/bao bì theo size, quy đổi điểm Hạt Vàng (`requiredPoints` phía server) và khóa giữ chỗ voucher.
+6. **Frontend Components & Route Guard:** Kiểm thử `ProductDetailClient`, `VoucherModal`, `RevenueChartSection`, `api-client`, `kds-chime` và Edge `route-guard`.
 
 ---
 
@@ -340,11 +345,13 @@ npm test
 | **Orders** | `PATCH`| `/orders/:id/status`| Cập nhật trạng thái đơn hàng (kiểm tra State Machine) | ✅ Bearer JWT |
 | **Payments**| `POST` | `/payments` | Xử lý thanh toán (kiểm tra Idempotency & Optimistic Locking) | ✅ Bearer JWT |
 
+> 📌 Xem đầy đủ danh mục **52 REST API endpoints** kèm ví dụ Request/Response Body tại [BAO_CAO_API.md](./BAO_CAO_API.md).
+
 ---
 
-## 📊 Bảng Tiến Độ Agile Scrum (Sprint 1 – Sprint 3)
+## 📊 Bảng Tiến Độ Agile Scrum (Sprint 1 – Sprint 5)
 
-Dự án đã hoàn thành **100%** toàn bộ 10 nhiệm vụ trong cả 3 Sprints:
+Dự án đã hoàn thành **100%** toàn bộ 18 nhiệm vụ qua 5 Sprints:
 
 - **Sprint 1 (Nền tảng & Hiển thị Thực Đơn):**
   - [x] **Task 1:** Khởi tạo cấu trúc Monorepo Next.js + NestJS, Docker Compose, Git workflow và tài liệu kỹ thuật.
@@ -360,12 +367,19 @@ Dự án đã hoàn thành **100%** toàn bộ 10 nhiệm vụ trong cả 3 Spri
 - **Sprint 3 (Thanh Toán Không Tiền Mặt, Bàn Giao & Nghiệp Vụ Nâng Cao):**
   - [x] **Task 8:** Thanh toán không tiền mặt tích hợp Mock Payment Gateway, cờ `simulateFailure`.
   - [x] **Task 9:** Màn hình xác nhận đơn hàng, hóa đơn điện tử e-receipt, lịch sử `GET /orders/me` và Dockerfile đa tầng.
-  - [x] **Task 10:** Nghiệp vụ Backend nâng cao & Thẻ thành viên Drawer:
-    - Finite State Machine Guard (`assertTransition`) & route `PATCH /orders/:id/status`.
-    - Kiểm soát xung đột đồng thời với Optimistic Locking (`version` column).
-    - Payment Idempotency Key bảo vệ giao dịch thanh toán trùng lặp.
-    - Hệ thống tích lũy điểm thưởng Hạt Vàng & Thẻ thành viên Drawer trực quan, sinh động.
-    - Xử lý mã giảm giá Voucher (`BREW10`, `BREWCOZY`, `BREW20`) an toàn phía máy chủ.
+  - [x] **Task 10:** Finite State Machine Guard, Optimistic Locking (`version`), Payment Idempotency Key, tích điểm Hạt Vàng và xử lý mã giảm giá.
+
+- **Sprint 4 (Mở Rộng Vận Hành, Quản Trị & ZaloPay Sandbox):**
+  - [x] **Task 11:** Giao diện `LoyaltyDrawer`, `VoucherModal`, đổi điểm lấy voucher (`UserVoucher`), kiểm tra `DiscountCode` (gồm trần giảm giá) và tài liệu cài đặt.
+  - [x] **Task 12:** Phân quyền **RBAC** (`CUSTOMER`/`STAFF`/`ADMIN`), bảng điều phối pha chế **Barista KDS** (`/staff`) và cổng quản trị `/admin` (nhân sự, biểu đồ doanh thu 7 ngày).
+  - [x] **Task 13:** Quản lý kho nguyên vật liệu (`Ingredient`), công thức định lượng **BOM** (`Recipe`, `ToppingRecipe`), tính giá vốn **COGS**/lợi nhuận gộp và nhật ký kho (`InventoryLog`).
+  - [x] **Task 14:** Tích hợp **ZaloPay Sandbox QR**, hồ sơ & quản trị khách hàng (`/admin/customers`), cấu hình phụ thu size (`StoreSetting`) và quản lý bao bì (`PACKAGING`).
+
+- **Sprint 5 (Kiểm Toán Bảo Mật, Đồng Thời & Kiểm Thử Toàn Diện):**
+  - [x] **Task 15:** Kiểm toán & vá lỗi bảo mật (Server-side Pricing, HMAC & amount verification trên webhook ZaloPay, chống IDOR, khóa giữ chỗ voucher, out-of-stock theo size).
+  - [x] **Task 16:** Kiểm soát đồng thời bằng Atomic CAS Guard, tự động hủy & hoàn kho đơn `PENDING`/`PAYMENT_FAILED` quá hạn 5 phút, chống brute-force (`@Throttle`), kiểm tra `isActive` thời gian thực trong `JwtStrategy` và biên soạn `BAO_CAO_API.md`.
+  - [x] **Task 17:** Hoàn tất kế hoạch khắc phục 43 điểm lỗi (đồng bộ đường/đá/nhiệt độ/ghi chú lên KDS, Edge `middleware.ts` route-guard, báo hết món 86, chuông KDS, `Order.idempotencyKey`), bổ sung **Vitest Frontend** (6 suites) và mở rộng unit test Backend.
+  - [x] **Task 18:** Rà soát và khắc phục các lỗi API còn sót kèm unit test hồi quy và kiểm thử Postman toàn hệ thống.
 
 ---
 
