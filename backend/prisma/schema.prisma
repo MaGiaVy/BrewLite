@@ -81,7 +81,7 @@ model InventoryLog {
   ingredientId   Int
   ingredientName String
   unit           String
-  type           String     @default("RESTOCK") // RESTOCK | ADJUST
+  type           String     @default("RESTOCK") // RESTOCK | ADJUST | SALE | CANCEL_REFUND
   changeAmount   Float
   previousStock  Float
   newStock       Float

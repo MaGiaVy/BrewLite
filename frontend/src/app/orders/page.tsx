@@ -897,7 +897,7 @@ function OrdersContent() {
 
   const totalPoints = visibleOrders.reduce(
     (sum, o) =>
-      ["PAID", "COMPLETED", "PREPARING", "READY"].includes(o.status)
+      o.status === "COMPLETED"
         ? sum + Math.floor(o.totalAmount / 1000)
         : sum,
     0

@@ -83,7 +83,7 @@ export class UsersService {
 
     if (requestedRole !== Role.STAFF) {
       throw new BadRequestException(
-        'Hệ thống chỉ duy trì 1 tài khoản Quản trị viên duy nhất (admin@brewlite.vn). Nhân viên tạo mới bắt buộc có vai trò STAFF.',
+        'Không thể tạo tài khoản Quản trị viên (ADMIN) qua API nhằm bảo vệ Root Admin (admin@brewlite.vn). Nhân viên tạo mới bắt buộc có vai trò STAFF.',
       );
     }
 
@@ -176,10 +176,10 @@ export class UsersService {
       }
     }
 
-    // Chính sách Single Root Admin: không cho phép thăng cấp bất kỳ tài khoản nào lên ADMIN
+    // Bảo vệ Root Admin qua API: không cho phép thăng cấp bất kỳ tài khoản nào lên ADMIN
     if (dto.role === Role.ADMIN && user.role !== Role.ADMIN) {
       throw new BadRequestException(
-        'Hệ thống chỉ duy trì 1 tài khoản Quản trị viên duy nhất (admin@brewlite.vn). Không thể nâng cấp tài khoản khác lên vai trò Admin.',
+        'Không thể nâng cấp tài khoản khác lên vai trò Quản trị viên (ADMIN) qua API nhằm bảo vệ phân quyền Root Admin.',
       );
     }
 

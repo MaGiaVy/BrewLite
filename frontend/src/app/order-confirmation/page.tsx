@@ -690,8 +690,8 @@ function OrderConfirmationContent() {
                   </span>
                 </div>
               </div>
-              {/* Loyalty chip */}
-              {!isCancelled && !isUnpaid && (
+              {/* Loyalty chip (only display earned badge when order is COMPLETED; pending estimate is shown below) */}
+              {isCompleted && (
                 <div className="absolute -top-1 -right-3 bg-[#ffdcc2] text-[#2e1500] text-[10px] font-bold px-2 py-0.5 rounded-full shadow-sm flex items-center gap-0.5">
                   <span className="material-symbols-outlined text-xs">
                     local_cafe

@@ -431,9 +431,9 @@ function ZaloPayGatewayContent() {
       setErrorMessage("");
       try {
         await new Promise((r) => setTimeout(r, 1000));
-        const cancelRes = await apiFetch("/payments/zalopay/cancel", {
-          method: "POST",
-          body: JSON.stringify({ orderId }),
+        const cancelRes = await apiFetch(`/orders/${orderId}/status`, {
+          method: "PATCH",
+          body: JSON.stringify({ status: "CANCELLED" }),
         });
         const cancelData = await cancelRes.json().catch(() => ({}));
         if (cancelRes.ok) {
@@ -562,9 +562,9 @@ function ZaloPayGatewayContent() {
     setIsCancelling(true);
     setErrorMessage("");
     try {
-      const res = await apiFetch("/payments/zalopay/cancel", {
-        method: "POST",
-        body: JSON.stringify({ orderId }),
+      const res = await apiFetch(`/orders/${orderId}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: "CANCELLED" }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
